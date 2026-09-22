@@ -1,0 +1,22 @@
+{
+  "name": "quizverse",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"vite\" \"node --env-file=.env server.js\"",
+    "build": "vite build",
+    "start": "node --env-file=.env server.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.117.0",
+    "@vitejs/plugin-react": "latest",
+    "concurrently": "latest",
+    "express": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "socket.io": "latest",
+    "socket.io-client": "latest",
+    "vite": "latest"
+  }
+}
