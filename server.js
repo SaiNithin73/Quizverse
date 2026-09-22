@@ -2,6 +2,8 @@ import express from 'express'
 import { createServer } from 'node:http'
 import { Server } from 'socket.io'
 import { randomUUID } from 'node:crypto'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { databaseStatus, deleteParticipant, initDatabase, listArchivedParticipants, saveEvent, saveParticipant, saveSubmission, startNewEvent } from './database.js'
 
 const app = express()
@@ -9,6 +11,7 @@ const httpServer = createServer(app)
 const io = new Server(httpServer, { cors: { origin: '*' } })
 const port = process.env.PORT || 3001
 const hostPassword = process.env.QUIZVERSE_HOST_PASSWORD || 'Sai nithin 26'
+const currentDirectory = path.dirname(fileURLToPath(import.meta.url))
 
 const questions = [
   { id: 'q1', prompt: 'Which data structure gives average O(1) key lookup?', options: ['Binary tree', 'Hash table', 'Linked list', 'Heap'], answer: 'Hash table', points: 100 },
@@ -74,6 +77,8 @@ const broadcast = () => io.emit('state:update', publicState())
 app.use(express.json())
 app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'quizverse', database: databaseStatus() }))
 app.get('/api/state', (_req, res) => res.json(publicState()))
+app.use(express.static(path.join(currentDirectory, 'dist')))
+app.get('/', (_req, res) => res.sendFile(path.join(currentDirectory, 'dist', 'index.html')))
 
 io.on('connection', (socket) => {
   socket.emit('state:update', publicState())
