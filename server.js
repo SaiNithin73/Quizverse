@@ -33,7 +33,7 @@ const difficultyRank = { easy: 0, medium: 1, moderate: 1, hard: 2 }
 const hostTokens = new Set()
 const knownRounds = new Set(['lobby', 'round1', 'round2', 'round3'])
 const hostAuthError = { error: 'Host session expired. Sign in to the host deck again.' }
-const round1QuestionCount = 50
+const round1QuestionCount = 30
 const shuffle = (items) => {
   const copy = [...items]
   for (let index = copy.length - 1; index > 0; index -= 1) {
@@ -57,7 +57,7 @@ function assignQuiz(participant) {
   return selected
 }
 
-const round2QuestionCount = 30
+const round2QuestionCount = 25
 
 function assignRound2(participant) {
   const allQuestions = state.r2Questions
@@ -69,11 +69,11 @@ function assignRound2(participant) {
   const shuffledEasy = shuffle(easy)
   const shuffledModerate = shuffle(moderate)
 
-  const easyCount = Math.min(15, shuffledEasy.length)
-  const moderateCount = Math.min(15, shuffledModerate.length)
-  const remaining = round2QuestionCount - easyCount - moderateCount
+  const easyCount = Math.min(Math.ceil(round2QuestionCount / 2), shuffledEasy.length)
+  const moderateCount = Math.min(round2QuestionCount - easyCount, shuffledModerate.length)
 
   let selected = [...shuffledEasy.slice(0, easyCount), ...shuffledModerate.slice(0, moderateCount)]
+  const remaining = round2QuestionCount - selected.length
 
   if (remaining > 0) {
     const usedIds = new Set(selected.map(q => q.id))
@@ -104,7 +104,7 @@ const participantR2Quiz = (participant) => ({
   questions: (participant.r2Questions || []).map(({ answer, explanation, ...q }) => q),
   draftCodes: participant.r2DraftCodes || {},
   startedAt: participant.r2StartedAt,
-  durationSeconds: 45 * 60
+  durationSeconds: 30 * 60
 })
 
 const rapidFireQuestionCount = 10

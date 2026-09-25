@@ -33,11 +33,11 @@ function App() {
   const [secondsLeft, setSecondsLeft] = useState(1800)
 
   // Round 2 State (Codebase Debugging)
-  const [r2Quiz, setR2Quiz] = useState({ questions: [], startedAt: null, durationSeconds: 2700 })
+  const [r2Quiz, setR2Quiz] = useState({ questions: [], startedAt: null, durationSeconds: 1800 })
   const [r2Drafts, setR2Drafts] = useState({})
   const [r2TestResults, setR2TestResults] = useState({})
   const [r2Index, setR2Index] = useState(0)
-  const [r2SecondsLeft, setR2SecondsLeft] = useState(2700)
+  const [r2SecondsLeft, setR2SecondsLeft] = useState(1800)
 
   // Round 3 State (Rapid Fire)
   const [rapidQuiz, setRapidQuiz] = useState({ questions: [], startedAt: null, durationSeconds: 900, draftAnswers: {}, draftCodes: {}, testResults: {} })
@@ -280,7 +280,7 @@ function App() {
     return () => clearInterval(timer)
   }, [quiz.startedAt, quiz.durationSeconds, state.round])
 
-  // Round 2 Timer (45 minutes)
+  // Round 2 Timer (30 minutes)
   useEffect(() => {
     if (!r2Quiz.startedAt || state.round !== 'round2') return undefined
     const timer = setInterval(() => {
@@ -802,7 +802,7 @@ function RulesModal({ onClose }) {
           </div>
           <div className="rule-card">
             <strong>02. Round 2: Debugging Dimension</strong>
-            <p>Error-finding codebase arena. Identify and fix logical or syntax bugs in real JavaScript functions. Run test cases and submit within 45 minutes.</p>
+            <p>Error-finding codebase arena. Identify and fix logical or syntax bugs in real JavaScript functions. Run test cases and submit within 30 minutes.</p>
           </div>
           <div className="rule-card">
             <strong>03. Real-Time Auto-Save</strong>
@@ -1068,7 +1068,7 @@ function Lobby({
               !completedRound2 ? (
                 <div style={{ marginTop: '24px' }}>
                   <button className="primary-button full" onClick={onEnterRound2}>
-                    <span>Enter Round 2: Debugging Dimension (45m)</span>
+                    <span>Enter Round 2: Debugging Dimension (30m)</span>
                     <span>⚡ →</span>
                   </button>
                   {completedRound1 && (
