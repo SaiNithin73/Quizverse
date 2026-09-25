@@ -1841,6 +1841,14 @@ main {
   box-shadow: 0 0 22px var(--gold-glow);
 }
 
+.winner-release-requirement {
+  margin-top: 12px;
+  color: var(--gold);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
 .winner-released-state {
   padding: 15px;
   border: 1px solid var(--green);

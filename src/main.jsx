@@ -2138,8 +2138,10 @@ function AdminPanel({ state, online, sessionExpired, onExit }) {
   }
 
   const releaseWinners = () => {
-    const selections = [1, 2, 3].map((place) => ({ place, participantId: winnerSelections[place] }))
-    if (selections.some((selection) => !selection.participantId)) return flash('Select a participant for every podium place.')
+    const selections = [1, 2, 3]
+      .filter((place) => winnerSelections[place])
+      .map((place) => ({ place, participantId: winnerSelections[place] }))
+    if (!selections.length) return flash('Select at least one podium winner.')
     if (!window.confirm('Release the selected 1st, 2nd, and 3rd place winners to everyone?')) return
     command('admin:release-winners', selections, (result) => {
       if (result.error) return flash(result.error)
@@ -2387,7 +2389,7 @@ function AdminPanel({ state, online, sessionExpired, onExit }) {
                 </span>
                 <span>Institution</span>
                 <span>Live Connection</span>
-                <span>Scores (R1/R2)</span>
+                <span>Scores (R1/R2/RF)</span>
                 <span>Status</span>
               </div>
 
@@ -2473,7 +2475,12 @@ function AdminPanel({ state, online, sessionExpired, onExit }) {
                   </label>
                 ))}
               </div>
-              <button className="admin-action-btn winner-release-button" onClick={releaseWinners} disabled={eligibleWinners.length < 3}>
+              {eligibleWinners.length < 3 && (
+                <p className="winner-release-requirement">
+                  Select one or more eligible Rapid Fire participants to enable the release.
+                </p>
+              )}
+              <button className="admin-action-btn winner-release-button" onClick={releaseWinners} disabled={!Object.values(winnerSelections).some(Boolean)}>
                 <span>Release Winners & Start Celebration</span><span>✦</span>
               </button>
             </>

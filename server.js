@@ -556,15 +556,17 @@ io.on('connection', (socket) => {
   socket.on('admin:release-winners', async (selections, callback) => {
     if (!socket.data.isAdmin) return callback?.(hostAuthError)
     if (state.winnersReleasedAt) return callback?.({ error: 'Winners have already been released for this event.' })
-    if (!Array.isArray(selections) || selections.length !== 3) {
-      return callback?.({ error: 'Select exactly one winner for 1st, 2nd, and 3rd place.' })
+    if (!Array.isArray(selections) || selections.length < 1 || selections.length > 3) {
+      return callback?.({ error: 'Select at least one podium winner before releasing.' })
     }
 
     const places = selections.map((selection) => Number(selection.place)).sort((left, right) => left - right)
-    if (places.join(',') !== '1,2,3') return callback?.({ error: 'Winner places must be 1st, 2nd, and 3rd.' })
+    if (places.some((place) => ![1, 2, 3].includes(place)) || new Set(places).size !== places.length) {
+      return callback?.({ error: 'Winner places must be 1st, 2nd, or 3rd.' })
+    }
 
     const participantIds = selections.map((selection) => selection.participantId)
-    if (new Set(participantIds).size !== 3) return callback?.({ error: 'A participant can only hold one winning place.' })
+    if (new Set(participantIds).size !== selections.length) return callback?.({ error: 'A participant can only hold one winning place.' })
 
     const winners = selections.map((selection) => {
       const participant = state.participants.get(selection.participantId)
