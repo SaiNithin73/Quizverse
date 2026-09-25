@@ -3,7 +3,9 @@ create table if not exists public.event_settings (
   current_event_id text not null default 'event-1',
   registration_open boolean not null default true,
   round text not null default 'lobby',
-  started_at timestamptz
+  started_at timestamptz,
+  winners jsonb,
+  winners_released_at timestamptz
 );
 
 create table if not exists public.participants (
@@ -20,6 +22,17 @@ create table if not exists public.participants (
   draft_answers jsonb not null default '{}'::jsonb,
   quiz_started_at timestamptz,
   quiz_submitted_at timestamptz,
+  r2_questions jsonb not null default '[]'::jsonb,
+  r2_draft_codes jsonb not null default '{}'::jsonb,
+  r2_started_at timestamptz,
+  r2_submitted_at timestamptz,
+  r2_test_results jsonb not null default '{}'::jsonb,
+  r3_questions jsonb not null default '[]'::jsonb,
+  r3_draft_answers jsonb not null default '{}'::jsonb,
+  r3_draft_codes jsonb not null default '{}'::jsonb,
+  r3_test_results jsonb not null default '{}'::jsonb,
+  r3_started_at timestamptz,
+  r3_submitted_at timestamptz,
   joined_at timestamptz not null default now()
 );
 

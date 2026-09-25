@@ -18,7 +18,10 @@ function App() {
     participants: [], 
     questions: [],
     eventId: 'event-1',
-    questionCount: 0 
+    questionCount: 0,
+    winners: null,
+    winnersReleasedAt: null,
+    winnerRecommendations: []
   })
   const [participant, setParticipant] = useState(null)
   
@@ -36,7 +39,15 @@ function App() {
   const [r2Index, setR2Index] = useState(0)
   const [r2SecondsLeft, setR2SecondsLeft] = useState(2700)
 
+  // Round 3 State (Rapid Fire)
+  const [rapidQuiz, setRapidQuiz] = useState({ questions: [], startedAt: null, durationSeconds: 900, draftAnswers: {}, draftCodes: {}, testResults: {} })
+  const [rapidIndex, setRapidIndex] = useState(0)
+  const [rapidSelected, setRapidSelected] = useState(null)
+  const [rapidSecondsLeft, setRapidSecondsLeft] = useState(900)
+
   const [scoreReveal, setScoreReveal] = useState(null)
+  const revealHandledRef = useRef(null)
+  const rapidTimeoutSubmittedRef = useRef(false)
   const [view, setView] = useState(savedId ? 'lobby' : 'home')
   const [form, setForm] = useState({ name: '', college: '', department: '', year: 'Final year' })
   const [notice, setNotice] = useState('')
@@ -88,6 +99,10 @@ function App() {
       if (next) setState(next)
     })
 
+    socket.on('winners:released', ({ winners, releasedAt }) => {
+      setState((current) => ({ ...current, winners, winnersReleasedAt: releasedAt }))
+    })
+
     socket.on('disconnect', () => setOnline(false))
     
     socket.on('participant:restored', (next) => {
@@ -107,6 +122,16 @@ function App() {
           ...curr,
           questions: next.r2Questions,
           startedAt: next.r2StartedAt || curr.startedAt
+        }))
+      }
+      if (next?.r3Questions?.length) {
+        setRapidQuiz((curr) => ({
+          ...curr,
+          questions: next.r3Questions,
+          startedAt: next.r3StartedAt || curr.startedAt,
+          draftAnswers: next.r3DraftAnswers || {},
+          draftCodes: next.r3DraftCodes || {},
+          testResults: next.r3TestResults || {}
         }))
       }
     })
@@ -141,6 +166,9 @@ function App() {
     })
 
     socket.on('quiz:submitted', (result) => { 
+      const revealKey = `round1:${result.score}:${result.total}`
+      if (revealHandledRef.current === revealKey) return
+      revealHandledRef.current = revealKey
       setScoreReveal({ ...result, round: 'round1' })
       setParticipant((prev) => prev ? ({ 
         ...prev, 
@@ -153,6 +181,10 @@ function App() {
     })
 
     socket.on('r2:submitted', (result) => {
+      if (result?.round !== 'round2' && result?.round !== undefined) return
+      const revealKey = `round2:${result.score}:${result.totalScore}`
+      if (revealHandledRef.current === revealKey) return
+      revealHandledRef.current = revealKey
       setScoreReveal({ ...result, round: 'round2' })
       setParticipant((prev) => prev ? ({ 
         ...prev, 
@@ -160,6 +192,40 @@ function App() {
         status: 'submitted', 
         score: result.totalScore, 
         roundScores: { ...(prev.roundScores || {}), round2: result.score } 
+      }) : prev)
+      setView('score')
+    })
+
+    socket.on('participant:rapid-fire', (next) => {
+      rapidTimeoutSubmittedRef.current = false
+      setRapidQuiz(next)
+      setRapidSelected(next.draftAnswers?.[next.questions?.[0]?.id] || null)
+      setRapidSecondsLeft(Math.max(0, next.durationSeconds - Math.floor((Date.now() - Date.parse(next.startedAt || new Date().toISOString())) / 1000)))
+    })
+
+    socket.on('rapid-fire:answer-saved', ({ questionId, answer }) => {
+      setRapidQuiz((current) => ({ ...current, draftAnswers: { ...(current.draftAnswers || {}), [questionId]: answer } }))
+    })
+
+    socket.on('rapid-fire:draft-saved', ({ questionId, code, testResults }) => {
+      setRapidQuiz((current) => ({
+        ...current,
+        draftCodes: { ...(current.draftCodes || {}), [questionId]: code },
+        testResults: testResults ? { ...(current.testResults || {}), [questionId]: testResults } : current.testResults
+      }))
+    })
+
+    socket.on('rapid-fire:submitted', (result) => {
+      const revealKey = `round3:${result.score}:${result.totalScore}`
+      if (revealHandledRef.current === revealKey) return
+      revealHandledRef.current = revealKey
+      setScoreReveal(result)
+      setParticipant((prev) => prev ? ({
+        ...prev,
+        r3SubmittedAt: new Date().toISOString(),
+        status: 'submitted',
+        score: result.totalScore,
+        roundScores: { ...(prev.roundScores || {}), round3: result.score }
       }) : prev)
       setView('score')
     })
@@ -221,6 +287,19 @@ function App() {
   }, [r2Quiz.startedAt, r2Quiz.durationSeconds, state.round])
 
   useEffect(() => {
+    if (!rapidQuiz.startedAt || state.round !== 'round3') return undefined
+    const timer = setInterval(() => {
+      const remaining = Math.max(0, rapidQuiz.durationSeconds - Math.floor((Date.now() - Date.parse(rapidQuiz.startedAt)) / 1000))
+      setRapidSecondsLeft(remaining)
+      if (remaining === 0 && !rapidTimeoutSubmittedRef.current) {
+        rapidTimeoutSubmittedRef.current = true
+        submitRapidFire()
+      }
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [rapidQuiz.startedAt, rapidQuiz.durationSeconds, state.round])
+
+  useEffect(() => {
     if (!participant) return
     const current = state.participants.find((item) => item.id === participant.id)
     if (current) setParticipant(current)
@@ -229,9 +308,11 @@ function App() {
 
   const completedRound1 = Boolean(participant?.quizSubmittedAt || (participant?.status === 'submitted' && participant?.roundScores?.round1 !== undefined && participant?.quizQuestions?.length > 0))
   const completedRound2 = Boolean(participant?.r2SubmittedAt)
+  const completedRound3 = Boolean(participant?.r3SubmittedAt)
 
   const activeQuestion = quiz.questions[questionIndex]
   const activeR2Question = r2Quiz.questions[r2Index]
+  const activeRapidQuestion = rapidQuiz.questions[rapidIndex]
 
   const register = (event) => {
     event.preventDefault()
@@ -288,6 +369,30 @@ function App() {
     })
   }
 
+  const saveRapidAnswer = (value) => {
+    if (completedRound3 || !participant || !activeRapidQuestion) return
+    setRapidSelected(value)
+    setRapidQuiz((current) => ({ ...current, draftAnswers: { ...(current.draftAnswers || {}), [activeRapidQuestion.id]: value } }))
+    socket.emit('participant:rapid-fire-answer', { participantId: participant.id, questionId: activeRapidQuestion.id, answer: value })
+  }
+
+  const saveRapidCode = (code, testResults) => {
+    if (completedRound3 || !participant || !activeRapidQuestion) return
+    setRapidQuiz((current) => ({
+      ...current,
+      draftCodes: { ...(current.draftCodes || {}), [activeRapidQuestion.id]: code },
+      testResults: testResults ? { ...(current.testResults || {}), [activeRapidQuestion.id]: testResults } : current.testResults
+    }))
+    socket.emit('participant:rapid-fire-draft', { participantId: participant.id, questionId: activeRapidQuestion.id, code, testResults })
+  }
+
+  const submitRapidFire = () => {
+    if (!participant || completedRound3) return
+    socket.emit('participant:submit-rapid-fire', { participantId: participant.id }, (result) => {
+      if (result?.error) showToast(result.error)
+    })
+  }
+
   const handleEnterRound1 = () => {
     setQuestionIndex(0)
     setSelected(null)
@@ -308,6 +413,18 @@ function App() {
   const handleAnalyzeRound2 = () => {
     setR2Index(0)
     setView('r2-quiz')
+  }
+
+  const handleEnterRapidFire = () => {
+    setRapidIndex(0)
+    setRapidSelected(rapidQuiz.draftAnswers?.[rapidQuiz.questions?.[0]?.id] || null)
+    setView('rapid-fire')
+  }
+
+  const handleAnalyzeRapidFire = () => {
+    setRapidIndex(0)
+    setRapidSelected(rapidQuiz.draftAnswers?.[rapidQuiz.questions?.[0]?.id] || null)
+    setView('rapid-fire')
   }
 
   if (isAdmin) {
@@ -387,8 +504,11 @@ function App() {
             onEnterRound2={handleEnterRound2}
             onAnalyzeRound1={handleAnalyzeRound1}
             onAnalyzeRound2={handleAnalyzeRound2}
+            onEnterRapidFire={handleEnterRapidFire}
+            onAnalyzeRapidFire={handleAnalyzeRapidFire}
             completedRound1={completedRound1}
             completedRound2={completedRound2}
+            completedRound3={completedRound3}
           />
         )}
 
@@ -473,6 +593,51 @@ function App() {
           />
         )}
 
+        {view === 'rapid-fire' && (
+          <RapidFire
+            question={activeRapidQuestion}
+            selected={rapidQuiz.draftAnswers?.[activeRapidQuestion?.id] || rapidSelected}
+            setSelected={saveRapidAnswer}
+            code={rapidQuiz.draftCodes?.[activeRapidQuestion?.id] || activeRapidQuestion?.initial_code || ''}
+            onSaveCode={saveRapidCode}
+            testResults={rapidQuiz.testResults?.[activeRapidQuestion?.id]}
+            setTestResults={(result) => setRapidQuiz((current) => ({ ...current, testResults: { ...(current.testResults || {}), [activeRapidQuestion.id]: result } }))}
+            index={rapidIndex}
+            total={rapidQuiz.questions.length}
+            secondsLeft={rapidSecondsLeft}
+            onNext={() => {
+              const nextIndex = Math.min(rapidIndex + 1, rapidQuiz.questions.length - 1)
+              setRapidIndex(nextIndex)
+              setRapidSelected(rapidQuiz.draftAnswers?.[rapidQuiz.questions[nextIndex]?.id] || null)
+            }}
+            onPrev={() => {
+              const previousIndex = Math.max(0, rapidIndex - 1)
+              setRapidIndex(previousIndex)
+              setRapidSelected(rapidQuiz.draftAnswers?.[rapidQuiz.questions[previousIndex]?.id] || null)
+            }}
+            onReview={() => setView('rapid-review')}
+            onSubmit={submitRapidFire}
+            onBackToLobby={() => setView('lobby')}
+            isCompleted={completedRound3}
+          />
+        )}
+
+        {view === 'rapid-review' && (
+          <RapidFireReview
+            questions={rapidQuiz.questions}
+            answers={rapidQuiz.draftAnswers || {}}
+            testResults={rapidQuiz.testResults || {}}
+            onSelect={(index) => {
+              setRapidIndex(index)
+              setRapidSelected(rapidQuiz.draftAnswers?.[rapidQuiz.questions[index]?.id] || null)
+              setView('rapid-fire')
+            }}
+            onSubmit={submitRapidFire}
+            onBackToLobby={() => setView('lobby')}
+            isCompleted={completedRound3}
+          />
+        )}
+
         {view === 'score' && (
           <ScoreReveal 
             result={scoreReveal} 
@@ -480,6 +645,8 @@ function App() {
             onAnalyze={() => {
               if (scoreReveal?.round === 'round2') {
                 handleAnalyzeRound2()
+              } else if (scoreReveal?.round === 'round3') {
+                handleAnalyzeRapidFire()
               } else {
                 handleAnalyzeRound1()
               }
@@ -493,6 +660,35 @@ function App() {
 
 
       {notice && view !== 'quiz' && view !== 'r2-quiz' && <div className="toast">{notice}</div>}
+      {state.winners && state.winnersReleasedAt && <WinnerCelebration winners={state.winners} participantId={participant?.id} />}
+    </div>
+  )
+}
+
+function WinnerCelebration({ winners, participantId }) {
+  const confetti = Array.from({ length: 56 }, (_, index) => index)
+  const winner = winners.find((item) => item.participantId === participantId)
+  return (
+    <div className="winner-celebration" role="status" aria-live="polite">
+      <div className="sparkle-field" aria-hidden="true">
+        {confetti.map((index) => <i key={index} style={{ '--sparkle-index': index, left: `${(index * 17) % 100}%` }} />)}
+      </div>
+      <div className="party-cracker party-cracker-left" aria-hidden="true">🎉</div>
+      <div className="party-cracker party-cracker-right" aria-hidden="true">🎉</div>
+      <div className="winner-announcement">
+        <div className="eyebrow"><span className="eyebrow-line" /><span>WINNERS RELEASED</span><span className="eyebrow-line" /></div>
+        <h2>{winner ? <>You placed<br /><em>{winner.place === 1 ? '1st' : winner.place === 2 ? '2nd' : '3rd'}.</em></> : <>The podium<br /><em>is live.</em></>}</h2>
+        <p>{winner ? `Congratulations, ${winner.name}. Your final score is ${winner.score} points.` : 'Celebrate the competitors who claimed the Rapid Fire podium.'}</p>
+        <div className="winner-podium">
+          {winners.map((item) => (
+            <div className={`winner-place winner-place-${item.place}`} key={item.participantId}>
+              <strong>{item.place === 1 ? '1ST' : item.place === 2 ? '2ND' : '3RD'}</strong>
+              <span>{item.name}</span>
+              <small>{item.score} PTS</small>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   )
 }
@@ -528,7 +724,7 @@ function Home({ onStart, onHost, onRules, hasIdentity }) {
           <p className="hero-kicker">A live arena across</p>
           <h1>Infinite<br /><em>Possibility.</em></h1>
           <p className="hero-body">
-            Test your algorithmic instinct in Round 1 Knowledge Realm, fix broken code in Round 2 Debugging Dimension, and outplay rival coders in real-time.
+            Test your algorithmic instinct in Round 1 Knowledge Realm, fix broken code in Round 2 Debugging Dimension, then survive a 15-minute Rapid Fire sprint.
           </p>
 
           <div className="home-actions">
@@ -572,7 +768,7 @@ function Home({ onStart, onHost, onRules, hasIdentity }) {
 
       <div className="home-footer">
         <span>LIVE MULTIVERSE SYNC</span>
-        <span>Round 1: Speed MCQ · Round 2: Code Debugging (45m)</span>
+        <span>Round 1: MCQ · Round 2: Debugging · Rapid Fire: 15m</span>
         <span>Version 2.0 // Realtime</span>
       </div>
     </section>
@@ -649,7 +845,7 @@ function HostLogin({ onBack, onLogin, onSetState }) {
           <span>HOST AUTHENTICATION</span>
         </div>
         <h2>Open the<br /><em>Command Deck.</em></h2>
-        <p>Control tournament rounds, start Round 2 debugging sessions, evaluate live submissions, and view candidate reports.</p>
+            <p>Control tournament rounds, launch Rapid Fire, evaluate live submissions, and view candidate reports.</p>
       </div>
 
       <form className="glass-form" onSubmit={login}>
@@ -773,8 +969,11 @@ function Lobby({
   onEnterRound2, 
   onAnalyzeRound1, 
   onAnalyzeRound2,
+  onEnterRapidFire,
+  onAnalyzeRapidFire,
   completedRound1,
-  completedRound2
+  completedRound2,
+  completedRound3
 }) {
   const hasIdentity = Boolean(participant)
   const roundLabels = {
@@ -785,14 +984,16 @@ function Lobby({
     round2: completedRound2
       ? 'Round 02: Debugging Dimension — Submitted & Sealed'
       : 'Round 02: Debugging Dimension is currently OPEN!',
-    round3: 'Round 03: Ultimate Challenge is currently OPEN!'
+    round3: completedRound3
+      ? 'Round 03: Rapid Fire — Submitted & Sealed'
+      : 'Round 03: Rapid Fire is currently OPEN!'
   }
 
   return (
     <section className="page-shell lobby-shell">
       <div className="lobby-card">
         <div className="signal-ring">
-          <span>{hasIdentity ? (round === 'round2' ? '02' : '01') : 'QV'}</span>
+          <span>{hasIdentity ? (round === 'round3' ? '03' : round === 'round2' ? '02' : '01') : 'QV'}</span>
         </div>
 
         <div className="eyebrow">
@@ -822,7 +1023,9 @@ function Lobby({
                     ? (completedRound1 ? 'Round 1 Completed & Evaluated' : 'Round 1 MCQ Portal Active')
                     : round === 'round2' 
                       ? (completedRound2 ? 'Round 2 Completed & Evaluated' : 'Round 2 Codebase Debugger Active')
-                      : 'Tournament in progress'}
+                      : round === 'round3'
+                        ? (completedRound3 ? 'Rapid Fire Completed & Evaluated' : 'Rapid Fire · 15 Minutes · 20 Questions')
+                        : 'Tournament in progress'}
               </span>
               <strong>{participant.score} PTS</strong>
             </div>
@@ -894,6 +1097,29 @@ function Lobby({
             )}
 
             {/* Lobby / Holding State */}
+            {round === 'round3' && participant.status !== 'eliminated' && (
+              !completedRound3 ? (
+                <div style={{ marginTop: '24px' }}>
+                  <button className="primary-button full rapid-fire-launch" onClick={onEnterRapidFire}>
+                    <span>Enter Rapid Fire · 15 Minutes</span>
+                    <span>200 PTS / Q →</span>
+                  </button>
+                  <p className="rapid-fire-note">10 MCQs + 10 debugging challenges. Questions are new for your run.</p>
+                </div>
+              ) : (
+                <div className="completed-round-box" style={{ marginTop: '24px' }}>
+                  <div className="completed-badge"><span>✓</span><strong>Rapid Fire Completed & Sealed</strong></div>
+                  <p style={{ margin: '12px 0 16px', color: 'var(--text-secondary)', fontSize: '0.95rem' }}>
+                    Rapid Fire score: <strong style={{ color: 'var(--cyan)' }}>{participant.roundScores?.round3 || 0} PTS</strong>.
+                  </p>
+                  <button className="quiet-button full" onClick={onAnalyzeRapidFire} style={{ width: '100%', borderColor: 'var(--cyan)' }}>
+                    <span>Review Rapid Fire</span><span>→</span>
+                  </button>
+                </div>
+              )
+            )}
+
+            {/* Lobby / Holding State */}
             {round === 'lobby' && (completedRound1 || completedRound2) && (
               <div style={{ marginTop: '24px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 {completedRound1 && (
@@ -921,7 +1147,7 @@ function Lobby({
 
       <div className="lobby-rail">
         <span>STATUS: <strong>{hasIdentity ? (completedRound2 ? 'ROUND 2 COMPLETED' : completedRound1 ? 'ROUND 1 COMPLETED' : 'CONNECTED (LIVE)') : 'OPEN'}</strong></span>
-        <span>SCORE: <strong>{hasIdentity ? `${participant.score} PTS (R1: ${participant.roundScores?.round1 || 0}, R2: ${participant.roundScores?.round2 || 0})` : '0 PTS'}</strong></span>
+                <span>SCORE: <strong>{hasIdentity ? `${participant.score} PTS (R1: ${participant.roundScores?.round1 || 0}, R2: ${participant.roundScores?.round2 || 0}, RF: ${participant.roundScores?.round3 || 0})` : '0 PTS'}</strong></span>
         <span>BEACON: <strong>{hasIdentity ? participant.id.slice(0, 8).toUpperCase() : 'UNCLAIMED'}</strong></span>
       </div>
     </section>
@@ -943,7 +1169,8 @@ function Quiz({
   index, 
   total, 
   secondsLeft,
-  isCompleted
+  isCompleted,
+  rapidFire = false
 }) {
   const minutes = String(Math.floor(secondsLeft / 60)).padStart(2, '0')
   const seconds = String(secondsLeft % 60).padStart(2, '0')
@@ -961,7 +1188,7 @@ function Quiz({
         {isCompleted && (
           <div className="analysis-pill">
             <span className="live-dot" style={{ background: 'var(--cyan)' }} />
-            <span>ANALYSIS MODE · ROUND 1 SUBMITTED</span>
+            <span>ANALYSIS MODE · {rapidFire ? 'RAPID FIRE SUBMITTED' : 'ROUND 1 SUBMITTED'}</span>
           </div>
         )}
       </div>
@@ -976,7 +1203,7 @@ function Quiz({
             <div className="quiz-meta-pills">
               <span className="eyebrow left">
                 <span className="eyebrow-line" />
-                <span>ROUND 01 / KNOWLEDGE REALM</span>
+                <span>{rapidFire ? 'RAPID FIRE / MCQ SPRINT' : 'ROUND 01 / KNOWLEDGE REALM'}</span>
               </span>
               {!isCompleted ? (
                 <div className={`quiz-timer-pill ${isTimeCritical ? 'danger' : isTimeLow ? 'warning' : ''}`}>
@@ -989,7 +1216,7 @@ function Quiz({
                 </div>
               )}
             </div>
-            <h2>{isCompleted ? <>Review Your<br /><em>Signals.</em></> : <>Make the<br /><em>Connection.</em></>}</h2>
+            <h2>{isCompleted ? <>Review Your<br /><em>{rapidFire ? 'Rapid Fire.' : 'Signals.'}</em></> : rapidFire ? <>Answer Fast<br /><em>Stay Sharp.</em></> : <>Make the<br /><em>Connection.</em></>}</h2>
           </div>
 
           <div className="question-count">
@@ -1002,8 +1229,8 @@ function Quiz({
       {question ? (
         <div className="question-card">
           <div className="question-meta">
-            <span>{question.topic || 'TECHNICAL SIGNAL'} · {question.difficulty || 'medium'}</span>
-            <span>+{question.points || 100} PTS</span>
+            <span>{rapidFire ? 'RAPID FIRE MCQ' : question.topic || 'TECHNICAL SIGNAL'} · {question.difficulty || 'medium'}</span>
+            <span>+{rapidFire ? 200 : question.points || 100} PTS</span>
           </div>
 
           <h3>{question.prompt}</h3>
@@ -1068,7 +1295,7 @@ function Quiz({
           </div>
 
           <p className="draft-note">
-            {isCompleted ? '✓ Round 1 locked and evaluated. Responses are in read-only analysis mode.' : '✓ Draft auto-saved securely. Answers remain private until final submission.'}
+            {isCompleted ? `✓ ${rapidFire ? 'Rapid Fire' : 'Round 1'} locked and evaluated. Responses are in read-only analysis mode.` : '✓ Draft auto-saved securely. Answers remain private until final submission.'}
           </p>
         </div>
       ) : (
@@ -1082,8 +1309,96 @@ function Quiz({
       )}
 
       <div className="quiz-footer">
-        <span>{isCompleted ? 'STATUS: ' : 'REMAINING TIME: '}<strong>{isCompleted ? 'ROUND 1 COMPLETED' : `${minutes}:${seconds}`}</strong></span>
-        <span>ALL DIMENSIONS SYNCED</span>
+        <span>{isCompleted ? 'STATUS: ' : 'REMAINING TIME: '}<strong>{isCompleted ? (rapidFire ? 'RAPID FIRE COMPLETED' : 'ROUND 1 COMPLETED') : `${minutes}:${seconds}`}</strong></span>
+        <span>{rapidFire ? '200 PTS PER HIT' : 'ALL DIMENSIONS SYNCED'}</span>
+      </div>
+    </section>
+  )
+}
+
+function RapidFire({ question, selected, setSelected, code, onSaveCode, testResults, setTestResults, index, total, secondsLeft, onNext, onPrev, onReview, onSubmit, onBackToLobby, isCompleted }) {
+  if (!question) {
+    return (
+      <section className="page-shell rapid-fire-shell">
+        <div className="closed-panel">
+          <h3>Rapid Fire is preparing</h3>
+          <p>Stay on this page while the host syncs your 20-question sprint.</p>
+        </div>
+      </section>
+    )
+  }
+
+  const isDebug = question.rapidFireSection === 'debug'
+  const commonProps = {
+    question,
+    index,
+    total,
+    secondsLeft,
+    onNext,
+    onPrev,
+    onReview,
+    onBackToLobby,
+    isCompleted,
+    rapidFire: true
+  }
+
+  return isDebug ? (
+    <Round2Debugger {...commonProps} code={code} onSaveCode={onSaveCode} testResults={testResults} setTestResults={setTestResults} rapidFire />
+  ) : (
+    <Quiz {...commonProps} selected={selected} setSelected={setSelected} onAnswer={() => index === total - 1 ? onReview() : onNext()} rapidFire />
+  )
+}
+
+function RapidFireReview({ questions, answers, testResults, onSelect, onSubmit, onBackToLobby, isCompleted }) {
+  const [confirming, setConfirming] = useState(false)
+  const answeredCount = questions.filter((question) => question.rapidFireSection === 'debug'
+    ? testResults[question.id]?.passRatio === 1
+    : Boolean(answers[question.id])).length
+
+  return (
+    <section className="page-shell review-shell rapid-review-shell">
+      <div className="review-back-row">
+        <button className="back-button" style={{ marginBottom: 0 }} onClick={onBackToLobby}>← Back to Lobby</button>
+        {isCompleted && <div className="analysis-pill"><span className="live-dot" /> ANALYSIS MODE · RAPID FIRE SUBMITTED</div>}
+      </div>
+
+      <div className="eyebrow">
+        <span className="eyebrow-line" />
+        <span>RAPID FIRE REVIEW · 20 QUESTIONS</span>
+        <span className="eyebrow-line" />
+      </div>
+      <h2>{isCompleted ? <>Audit Your<br /><em>Rapid Fire.</em></> : <>Lock Your<br /><em>Answers.</em></>}</h2>
+      <p className="review-copy">Check both the MCQ answers and debugging test results before submitting the 15-minute sprint.</p>
+
+      <div className="review-grid">
+        {questions.map((question, index) => {
+          const isDebug = question.rapidFireSection === 'debug'
+          const result = testResults[question.id]
+          const complete = isDebug ? result?.passRatio === 1 : Boolean(answers[question.id])
+          return (
+            <button key={question.id} className={`review-item ${complete ? 'answered' : ''}`} onClick={() => onSelect(index)}>
+              <div>
+                <strong>Q{String(index + 1).padStart(2, '0')}</strong>
+                <span>{isDebug ? 'Debug' : 'MCQ'} · {complete ? 'Ready' : 'Not answered'}</span>
+              </div>
+              <i>{complete ? '✓' : '·'}</i>
+            </button>
+          )
+        })}
+      </div>
+
+      <div className="review-submit">
+        <span>{answeredCount} of {questions.length} questions answered</span>
+        {isCompleted ? (
+          <button className="primary-button" onClick={onBackToLobby}><span>Return to Lobby</span><span>→</span></button>
+        ) : confirming ? (
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'center' }}>
+            <button className="quiet-button" onClick={() => setConfirming(false)}>Cancel</button>
+            <button className="primary-button btn-success" onClick={onSubmit}><span>Confirm Rapid Fire Submit</span><span>✓</span></button>
+          </div>
+        ) : (
+          <button className="primary-button" onClick={() => setConfirming(true)}><span>Submit Rapid Fire</span><span>↗</span></button>
+        )}
       </div>
     </section>
   )
@@ -1184,7 +1499,8 @@ function Round2Debugger({
   onBackToLobby,
   testResults, 
   setTestResults,
-  isCompleted
+  isCompleted,
+  rapidFire = false
 }) {
   const [currentCode, setCurrentCode] = useState(code)
   const [isRunning, setIsRunning] = useState(false)
@@ -1349,7 +1665,7 @@ function Round2Debugger({
         {isCompleted && (
           <div className="analysis-pill">
             <span className="live-dot" style={{ background: 'var(--cyan)' }} />
-            <span>ANALYSIS MODE · ROUND 2 SUBMITTED</span>
+            <span>ANALYSIS MODE · {rapidFire ? 'RAPID FIRE SUBMITTED' : 'ROUND 2 SUBMITTED'}</span>
           </div>
         )}
       </div>
@@ -1364,7 +1680,7 @@ function Round2Debugger({
             <div className="quiz-meta-pills">
               <span className="eyebrow left">
                 <span className="eyebrow-line" />
-                <span>ROUND 02 / DEBUGGING DIMENSION</span>
+                <span>{rapidFire ? 'RAPID FIRE / DEBUG SPRINT' : 'ROUND 02 / DEBUGGING DIMENSION'}</span>
               </span>
               {!isCompleted ? (
                 <div className={`quiz-timer-pill ${isTimeCritical ? 'danger' : isTimeLow ? 'warning' : ''}`}>
@@ -1377,7 +1693,7 @@ function Round2Debugger({
                 </div>
               )}
             </div>
-            <h2>{isCompleted ? <>Review Your<br /><em>Codebase.</em></> : <>Find & Fix<br /><em>the Glitch.</em></>}</h2>
+            <h2>{isCompleted ? <>Review Your<br /><em>{rapidFire ? 'Rapid Fire.' : 'Codebase.'}</em></> : rapidFire ? <>Fix Fast<br /><em>Ship Clean.</em></> : <>Find & Fix<br /><em>the Glitch.</em></>}</h2>
           </div>
 
           <div className="question-count">
@@ -1667,6 +1983,7 @@ function Round2Review({ questions, results, onSelect, onSubmit, onBackToLobby, i
 function ScoreReveal({ result, onReturnHome, onAnalyze }) {
   const [visibleScore, setVisibleScore] = useState(0)
   const isRound2 = result?.round === 'round2'
+  const isRapidFire = result?.round === 'round3'
 
   useEffect(() => {
     if (!result) return undefined
@@ -1694,24 +2011,32 @@ function ScoreReveal({ result, onReturnHome, onAnalyze }) {
 
       <div className="eyebrow">
         <span className="eyebrow-line" />
-        <span>{isRound2 ? 'ROUND 02 CODEBASE LOCKED' : 'ROUND 01 SUBMISSION SEALED'}</span>
+        <span>{isRapidFire ? 'RAPID FIRE LOCKED' : isRound2 ? 'ROUND 02 CODEBASE LOCKED' : 'ROUND 01 SUBMISSION SEALED'}</span>
         <span className="eyebrow-line" />
       </div>
 
       <h2>Dimension<br /><em>Decoded.</em></h2>
       <p className="score-subtitle">
-        {isRound2 
+        {isRapidFire
+          ? 'Your 20-question Rapid Fire sprint has been evaluated and synced to the host command deck.'
+          : isRound2 
           ? 'Your debugged codebase has been evaluated and synced to the host command deck.' 
           : 'Your Round 1 responses have been locked and recorded on the host command deck.'}
       </p>
 
       <div className="score-glass">
-        <div className="score-label">{isRound2 ? 'ROUND 02 SCORE' : 'ROUND 01 SCORE'}</div>
+        <div className="score-label">{isRapidFire ? 'RAPID FIRE SCORE' : isRound2 ? 'ROUND 02 SCORE' : 'ROUND 01 SCORE'}</div>
         <strong>{visibleScore}</strong>
         <span>POINTS EARNED</span>
 
         <div className="score-breakdown">
-          {isRound2 ? (
+          {isRapidFire ? (
+            <>
+              <div><b>{result.correctCount || 0}</b><small>Correct Hits</small></div>
+              <div><b>{result.totalScore || visibleScore}</b><small>Multiverse Total</small></div>
+              <div><b>{result.total || 0}</b><small>Rapid Fire Questions</small></div>
+            </>
+          ) : isRound2 ? (
             <>
               <div>
                 <b>{result.solvedCount || 0}</b>
@@ -1756,7 +2081,7 @@ function ScoreReveal({ result, onReturnHome, onAnalyze }) {
         </button>
         {onAnalyze && (
           <button className="primary-button" onClick={onAnalyze}>
-            <span>{isRound2 ? 'Review & Analyze Codebase' : 'Review & Analyze Answers'}</span>
+            <span>{isRapidFire ? 'Review Rapid Fire' : isRound2 ? 'Review & Analyze Codebase' : 'Review & Analyze Answers'}</span>
             <span>🔍</span>
           </button>
         )}
@@ -1773,6 +2098,7 @@ function AdminPanel({ state, online, sessionExpired, onExit }) {
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
   const [notice, setNotice] = useState('')
+  const [winnerSelections, setWinnerSelections] = useState({ 1: '', 2: '', 3: '' })
   const noticeTimer = useRef(null)
 
   // Every broadcast is acknowledged by the server so a rejected or lost
@@ -1784,6 +2110,12 @@ function AdminPanel({ state, online, sessionExpired, onExit }) {
   }
 
   useEffect(() => () => clearTimeout(noticeTimer.current), [])
+
+  useEffect(() => {
+    if (state.winners?.length === 3) {
+      setWinnerSelections(Object.fromEntries(state.winners.map((winner) => [winner.place, winner.participantId])))
+    }
+  }, [state.winners])
 
   const offlineMessage = 'Host deck is offline. Check the server connection and try again.'
   const timeoutMessage = 'The server did not respond. If the server was just updated, refresh this page.'
@@ -1802,6 +2134,16 @@ function AdminPanel({ state, online, sessionExpired, onExit }) {
     command('admin:round', round, (result) => {
       if (result.error) return flash(result.error)
       flash(`Broadcasting ${label} to every participant.`)
+    })
+  }
+
+  const releaseWinners = () => {
+    const selections = [1, 2, 3].map((place) => ({ place, participantId: winnerSelections[place] }))
+    if (selections.some((selection) => !selection.participantId)) return flash('Select a participant for every podium place.')
+    if (!window.confirm('Release the selected 1st, 2nd, and 3rd place winners to everyone?')) return
+    command('admin:release-winners', selections, (result) => {
+      if (result.error) return flash(result.error)
+      flash('Winners released. The celebration is live for every participant.')
     })
   }
 
@@ -1879,6 +2221,14 @@ function AdminPanel({ state, online, sessionExpired, onExit }) {
       return matchesSearch && matchesFilter
     })
   }, [state.participants, search, filter])
+
+  const eligibleWinners = useMemo(() => (state.participants || [])
+    .filter((participant) => participant.status !== 'eliminated' && participant.r3SubmittedAt)
+    .sort((left, right) => {
+      const scoreDifference = (right.score || 0) - (left.score || 0)
+      if (scoreDifference) return scoreDifference
+      return Date.parse(left.r3SubmittedAt) - Date.parse(right.r3SubmittedAt)
+    }), [state.participants])
 
   return (
     <div className="admin-app">
@@ -1976,10 +2326,10 @@ function AdminPanel({ state, online, sessionExpired, onExit }) {
 
               <button 
                 className={`control ${state.round === 'round3' ? 'active' : ''}`} 
-                onClick={() => setRound('round3', 'Round 3 · Ultimate Challenge')}
+                onClick={() => setRound('round3', 'Round 3 · Rapid Fire')}
               >
                 <span>03</span>
-                <div>Ultimate Challenge</div>
+                <div>Rapid Fire (10 MCQ + 10 Code)</div>
                 <b>{state.round === 'round3' ? '● ACTIVE' : 'LAUNCH ↗'}</b>
               </button>
             </div>
@@ -2070,7 +2420,7 @@ function AdminPanel({ state, online, sessionExpired, onExit }) {
                         </span>
                       )}
                     </span>
-                    <strong>{item.score} pts <small style={{ color: 'var(--text-muted)' }}>({item.roundScores?.round1 || 0}/{item.roundScores?.round2 || 0})</small></strong>
+                    <strong>{item.score} pts <small style={{ color: 'var(--text-muted)' }}>({item.roundScores?.round1 || 0}/{item.roundScores?.round2 || 0}/{item.roundScores?.round3 || 0})</small></strong>
                     <span className={`badge ${item.status}`}>{item.status}</span>
                   </div>
                 ))
@@ -2087,6 +2437,48 @@ function AdminPanel({ state, online, sessionExpired, onExit }) {
             </button>
           </section>
         </div>
+
+        <section className="winner-control-panel">
+          <div className="panel-heading">
+            <div>
+              <h2>Podium Release</h2>
+              <p className="winner-control-copy">Recommendations use total score, then earlier Rapid Fire completion time. The host makes the final selection.</p>
+            </div>
+            <span className="panel-tag">HOST DECISION</span>
+          </div>
+
+          {state.winnersReleasedAt ? (
+            <div className="winner-released-state">Winners released at {new Date(state.winnersReleasedAt).toLocaleTimeString()}</div>
+          ) : (
+            <>
+              <div className="winner-recommendations">
+                {(state.winnerRecommendations || []).map((winner) => (
+                  <div className="winner-recommendation" key={winner.participantId}>
+                    <strong>Recommended {winner.place === 1 ? '1st' : winner.place === 2 ? '2nd' : '3rd'}</strong>
+                    <span>{winner.name}</span>
+                    <small>{winner.score} total pts · Rapid Fire completed {new Date(winner.r3SubmittedAt).toLocaleTimeString()}</small>
+                  </div>
+                ))}
+                {!state.winnerRecommendations?.length && <div className="empty-roster">Recommendations appear after Rapid Fire submissions.</div>}
+              </div>
+
+              <div className="winner-select-grid">
+                {[1, 2, 3].map((place) => (
+                  <label className="winner-select" key={place}>
+                    <span>{place === 1 ? '1st Place' : place === 2 ? '2nd Place' : '3rd Place'}</span>
+                    <select value={winnerSelections[place]} onChange={(event) => setWinnerSelections((current) => ({ ...current, [place]: event.target.value }))}>
+                      <option value="">Choose participant</option>
+                      {eligibleWinners.map((participant) => <option value={participant.id} key={participant.id}>{participant.name} · {participant.score} pts</option>)}
+                    </select>
+                  </label>
+                ))}
+              </div>
+              <button className="admin-action-btn winner-release-button" onClick={releaseWinners} disabled={eligibleWinners.length < 3}>
+                <span>Release Winners & Start Celebration</span><span>✦</span>
+              </button>
+            </>
+          )}
+        </section>
 
         {showArchive && (
           <section className="archive-panel">
@@ -2144,6 +2536,7 @@ function AdminPanel({ state, online, sessionExpired, onExit }) {
 function ParticipantDetail({ detail, onClose }) {
   const r1Details = detail.r1Details || []
   const r2Details = detail.r2Details || []
+  const r3Details = detail.r3Details || []
 
   const r1Correct = r1Details.filter((item) => item.correct).length
   const r1Wrong = r1Details.filter((item) => item.answer && !item.correct).length
@@ -2160,7 +2553,7 @@ function ParticipantDetail({ detail, onClose }) {
             </div>
             <h2>{detail.participant.name}</h2>
             <small style={{ color: 'var(--text-secondary)', fontSize: '0.95rem' }}>
-              {detail.participant.college} · Total: <b>{detail.participant.score} pts</b> (R1: {detail.participant.roundScores?.round1 || 0}, R2: {detail.participant.roundScores?.round2 || 0}) · Status: {detail.participant.status}
+              {detail.participant.college} · Total: <b>{detail.participant.score} pts</b> (R1: {detail.participant.roundScores?.round1 || 0}, R2: {detail.participant.roundScores?.round2 || 0}, RF: {detail.participant.roundScores?.round3 || 0}) · Status: {detail.participant.status}
             </small>
           </div>
           <button className="quiet-button" onClick={onClose}>Close ✕</button>
@@ -2170,6 +2563,7 @@ function ParticipantDetail({ detail, onClose }) {
           <Stat label="Total Points" value={detail.participant.score} detail="Points Earned" />
           <Stat label="Round 1 Correct" value={`${r1Correct}/${r1Details.length}`} detail="MCQ Signals" />
           <Stat label="Round 2 Solved" value={`${r2Solved}/${r2Details.length}`} detail="Debugged Code" />
+          <Stat label="Rapid Fire" value={`${r3Details.filter((item) => item.correct).length}/${r3Details.length}`} detail="200 point hits" />
           <Stat label="Status" value={detail.participant.status.toUpperCase()} detail="Current State" />
         </div>
 

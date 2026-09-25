@@ -15,7 +15,7 @@ export async function initDatabase(state) {
   supabase = createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } })
   const { data: event, error: eventError } = await supabase
     .from('event_settings')
-    .select('id, registration_open, round, started_at')
+    .select('id, registration_open, round, started_at, winners, winners_released_at')
     .eq('id', 'main')
     .maybeSingle()
 
@@ -29,10 +29,12 @@ export async function initDatabase(state) {
     state.registrationOpen = event.registration_open
     state.round = event.round
     state.startedAt = event.started_at
+    state.winners = event.winners || null
+    state.winnersReleasedAt = event.winners_released_at || null
     state.eventId = 'event-1'
   } else {
     state.eventId = 'event-1'
-    await supabase.from('event_settings').insert({ id: 'main', current_event_id: state.eventId, registration_open: true, round: 'lobby' })
+    await supabase.from('event_settings').insert({ id: 'main', current_event_id: state.eventId, registration_open: true, round: 'lobby', winners: null, winners_released_at: null })
   }
 
   let { data: participants, error: participantError } = await supabase
@@ -66,6 +68,12 @@ export async function initDatabase(state) {
       r2StartedAt: participant.r2_started_at,
       r2SubmittedAt: participant.r2_submitted_at,
       r2TestResults: participant.r2_test_results || {},
+      r3Questions: participant.r3_questions || [],
+      r3DraftAnswers: participant.r3_draft_answers || {},
+      r3DraftCodes: participant.r3_draft_codes || {},
+      r3TestResults: participant.r3_test_results || {},
+      r3StartedAt: participant.r3_started_at,
+      r3SubmittedAt: participant.r3_submitted_at,
       joinedAt: participant.joined_at,
       socketId: null
     })
@@ -131,6 +139,12 @@ export async function saveParticipant(participant) {
     r2_started_at: participant.r2StartedAt || null,
     r2_submitted_at: participant.r2SubmittedAt || null,
     r2_test_results: participant.r2TestResults || {},
+    r3_questions: participant.r3Questions || [],
+    r3_draft_answers: participant.r3DraftAnswers || {},
+    r3_draft_codes: participant.r3DraftCodes || {},
+    r3_test_results: participant.r3TestResults || {},
+    r3_started_at: participant.r3StartedAt || null,
+    r3_submitted_at: participant.r3SubmittedAt || null,
     joined_at: participant.joinedAt
   })
   if (error) connectionError = error.message
@@ -143,7 +157,9 @@ export async function saveEvent(state) {
     current_event_id: state.eventId,
     registration_open: state.registrationOpen,
     round: state.round,
-    started_at: state.startedAt
+    started_at: state.startedAt,
+    winners: state.winners || null,
+    winners_released_at: state.winnersReleasedAt || null
   })
   if (error) {
     connectionError = error.message
@@ -158,6 +174,8 @@ export async function startNewEvent(state) {
   state.registrationOpen = true
   state.round = 'lobby'
   state.startedAt = null
+  state.winners = null
+  state.winnersReleasedAt = null
   state.participants.clear()
 
   if (!supabase) return true

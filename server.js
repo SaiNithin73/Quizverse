@@ -24,6 +24,8 @@ const state = {
   participants: new Map(),
   archivedParticipants: [],
   startedAt: null,
+  winners: null,
+  winnersReleasedAt: null,
   completed: new Set()
 }
 
@@ -105,7 +107,59 @@ const participantR2Quiz = (participant) => ({
   durationSeconds: 45 * 60
 })
 
+const rapidFireQuestionCount = 10
+const rapidFireDurationSeconds = 15 * 60
+
+function assignRapidFire(participant) {
+  const usedIds = new Set([
+    ...(participant.quizQuestions || []).map((question) => question.id),
+    ...(participant.r2Questions || []).map((question) => question.id)
+  ])
+  const availableMcq = shuffle(state.questions.filter((question) => !usedIds.has(question.id)))
+  const availableDebug = shuffle(state.r2Questions.filter((question) => !usedIds.has(question.id)))
+
+  if (availableMcq.length < rapidFireQuestionCount || availableDebug.length < rapidFireQuestionCount) {
+    return false
+  }
+
+  const mcqQuestions = availableMcq.slice(0, rapidFireQuestionCount).map((question) => ({ ...question, rapidFireSection: 'mcq' }))
+  const debugQuestions = availableDebug.slice(0, rapidFireQuestionCount).map((question) => ({ ...question, rapidFireSection: 'debug' }))
+  participant.r3Questions = [...mcqQuestions, ...debugQuestions].map(({ answer, explanation, ...question }) => question)
+  participant.r3StartedAt = new Date().toISOString()
+  participant.r3DraftAnswers = {}
+  participant.r3DraftCodes = {}
+  participant.r3TestResults = {}
+  for (const question of debugQuestions) participant.r3DraftCodes[question.id] = question.initial_code || ''
+  return true
+}
+
+const participantRapidFireQuiz = (participant) => ({
+  questions: participant.r3Questions || [],
+  draftAnswers: participant.r3DraftAnswers || {},
+  draftCodes: participant.r3DraftCodes || {},
+  testResults: participant.r3TestResults || {},
+  startedAt: participant.r3StartedAt,
+  durationSeconds: rapidFireDurationSeconds
+})
+
 const databaseReady = await initDatabase(state)
+
+const winnerRecommendations = () => [...state.participants.values()]
+  .filter((participant) => participant.status !== 'eliminated' && participant.r3SubmittedAt)
+  .sort((left, right) => {
+    const scoreDifference = (right.score || 0) - (left.score || 0)
+    if (scoreDifference) return scoreDifference
+    return Date.parse(left.r3SubmittedAt) - Date.parse(right.r3SubmittedAt)
+  })
+  .slice(0, 3)
+  .map((participant, index) => ({
+    place: index + 1,
+    participantId: participant.id,
+    name: participant.name,
+    score: participant.score || 0,
+    rapidFireScore: participant.roundScores?.round3 || 0,
+    r3SubmittedAt: participant.r3SubmittedAt
+  }))
 
 const publicState = () => ({
   registrationOpen: state.registrationOpen,
@@ -118,7 +172,10 @@ const publicState = () => ({
     ...participant,
     isConnected: Boolean(socketId && io.sockets.sockets.has(socketId))
   })),
-  eventId: state.eventId
+  eventId: state.eventId,
+  winners: state.winners,
+  winnersReleasedAt: state.winnersReleasedAt,
+  winnerRecommendations: winnerRecommendations()
 })
 
 const broadcast = () => io.emit('state:update', publicState())
@@ -179,12 +236,19 @@ io.on('connection', (socket) => {
       r2StartedAt: null,
       r2SubmittedAt: null,
       r2TestResults: {},
+      r3Questions: [],
+      r3DraftAnswers: {},
+      r3DraftCodes: {},
+      r3TestResults: {},
+      r3StartedAt: null,
+      r3SubmittedAt: null,
       joinedAt: new Date().toISOString(),
       socketId: socket.id
     }
     state.participants.set(id, participant)
     if (state.round === 'round1') assignQuiz(participant)
     if (state.round === 'round2') assignRound2(participant)
+    if (state.round === 'round3') assignRapidFire(participant)
     socket.data.participantId = id
     await saveParticipant(participant)
     callback?.({ participant: { ...participant, socketId: undefined } })
@@ -193,6 +257,9 @@ io.on('connection', (socket) => {
     }
     if (state.round === 'round2') {
       socket.emit('participant:r2-quiz', participantR2Quiz(participant))
+    }
+    if (state.round === 'round3' && participant.r3Questions.length) {
+      socket.emit('participant:rapid-fire', participantRapidFireQuiz(participant))
     }
     broadcast()
   })
@@ -204,6 +271,7 @@ io.on('connection', (socket) => {
       socket.data.participantId = id
       if (state.round === 'round1' && !participant.quizQuestions?.length) assignQuiz(participant)
       if (state.round === 'round2' && !participant.r2Questions?.length) assignRound2(participant)
+      if (state.round === 'round3' && !participant.r3Questions?.length) assignRapidFire(participant)
       saveParticipant(participant)
       socket.emit('participant:restored', participant)
       if (state.round === 'round1' && participant.quizQuestions.length) {
@@ -211,6 +279,9 @@ io.on('connection', (socket) => {
       }
       if (state.round === 'round2' && participant.r2Questions.length) {
         socket.emit('participant:r2-quiz', participantR2Quiz(participant))
+      }
+      if (state.round === 'round3' && participant.r3Questions.length) {
+        socket.emit('participant:rapid-fire', participantRapidFireQuiz(participant))
       }
       broadcast()
     }
@@ -325,6 +396,69 @@ io.on('connection', (socket) => {
     callback?.({ ok: true, result })
   })
 
+  socket.on('participant:rapid-fire-answer', async ({ participantId, questionId, answer }) => {
+    const participant = state.participants.get(participantId)
+    const question = state.questions.find((item) => item.id === questionId)
+    const assigned = participant?.r3Questions?.find((item) => item.id === questionId)
+    if (!participant || !question || !assigned || participant.r3SubmittedAt || state.round !== 'round3') return
+    participant.r3DraftAnswers = { ...(participant.r3DraftAnswers || {}), [questionId]: answer }
+    await saveParticipant(participant)
+    socket.emit('rapid-fire:answer-saved', { questionId, answer })
+  })
+
+  socket.on('participant:rapid-fire-draft', async ({ participantId, questionId, code, testResults }) => {
+    const participant = state.participants.get(participantId)
+    const assigned = participant?.r3Questions?.find((item) => item.id === questionId)
+    if (!participant || !assigned || participant.r3SubmittedAt || state.round !== 'round3') return
+    participant.r3DraftCodes = { ...(participant.r3DraftCodes || {}), [questionId]: code }
+    if (testResults) participant.r3TestResults = { ...(participant.r3TestResults || {}), [questionId]: testResults }
+    await saveParticipant(participant)
+    socket.emit('rapid-fire:draft-saved', { questionId, code, testResults })
+  })
+
+  socket.on('participant:submit-rapid-fire', async ({ participantId }, callback) => {
+    const participant = state.participants.get(participantId)
+    if (!participant) return callback?.({ error: 'Participant session not found.' })
+    if (participant.r3SubmittedAt) return callback?.({ error: 'Rapid Fire has already been submitted.' })
+    if (state.round !== 'round3') return callback?.({ error: 'Rapid Fire is not currently open.' })
+
+    let score = 0
+    let correctCount = 0
+    const results = {}
+    for (const question of participant.r3Questions || []) {
+      const source = question.rapidFireSection === 'debug'
+        ? state.r2Questions.find((item) => item.id === question.id)
+        : state.questions.find((item) => item.id === question.id)
+      const answer = participant.r3DraftAnswers?.[question.id]
+      const execution = participant.r3TestResults?.[question.id]
+      const correct = question.rapidFireSection === 'debug'
+        ? execution?.passRatio === 1
+        : answer !== undefined && answer === source?.answer
+      const points = correct ? 200 : 0
+      score += points
+      correctCount += correct ? 1 : 0
+      results[question.id] = { correct, points }
+    }
+
+    participant.roundScores = { ...(participant.roundScores || {}), round3: score }
+    participant.score = (participant.roundScores.round1 || 0) + (participant.roundScores.round2 || 0) + score
+    participant.status = 'submitted'
+    participant.r3SubmittedAt = new Date().toISOString()
+    await saveParticipant(participant)
+
+    const result = {
+      round: 'round3',
+      score,
+      totalScore: participant.score,
+      correctCount,
+      total: participant.r3Questions?.length || 0,
+      results
+    }
+    socket.emit('rapid-fire:submitted', result)
+    broadcast()
+    callback?.({ ok: true, result })
+  })
+
   socket.on('admin:registration', (open, callback) => {
     if (!socket.data.isAdmin) return callback?.(hostAuthError)
     state.registrationOpen = Boolean(open)
@@ -338,7 +472,17 @@ io.on('connection', (socket) => {
     if (!knownRounds.has(round)) return callback?.({ error: `Unknown dimension: ${round}` })
     if (round === 'round1' && !state.questions.length) return callback?.({ error: 'Round 1 has no active questions in the database.' })
     if (round === 'round2' && !state.r2Questions.length) return callback?.({ error: 'Round 2 has no active questions in the database. Check the question bank schema and seed data.' })
-    if (round === 'round3') return callback?.({ error: 'Round 3 is not configured with database questions yet.' })
+    if (round === 'round3' && (state.questions.length < rapidFireQuestionCount || state.r2Questions.length < rapidFireQuestionCount)) {
+      return callback?.({ error: 'Rapid Fire needs at least 10 active MCQs and 10 active debugging questions.' })
+    }
+    if (round === 'round3') {
+      const incomplete = [...state.participants.values()].filter((participant) => (
+        participant.status !== 'eliminated' && (!participant.quizSubmittedAt || !participant.r2SubmittedAt)
+      ))
+      if (incomplete.length) {
+        return callback?.({ error: `Rapid Fire is locked until all ${incomplete.length} remaining participant(s) complete Rounds 1 and 2.` })
+      }
+    }
     state.round = round
     state.startedAt = round === 'lobby' ? null : new Date().toISOString()
 
@@ -367,7 +511,14 @@ io.on('connection', (socket) => {
         }
       } else if (round === 'round3') {
         if (participant.status !== 'eliminated') {
-          participant.status = 'active'
+          if (!participant.quizSubmittedAt || !participant.r2SubmittedAt) {
+            participant.status = 'ready'
+          } else if (!participant.r3SubmittedAt) {
+            participant.status = 'active'
+            if (!participant.r3Questions?.length && !assignRapidFire(participant)) {
+              participant.status = 'ready'
+            }
+          }
         }
       }
     }
@@ -389,10 +540,51 @@ io.on('connection', (socket) => {
           participantSocket?.emit('participant:r2-quiz', participantR2Quiz(participant))
         }
       }
+    } else if (round === 'round3') {
+      for (const participant of state.participants.values()) {
+        const participantSocket = io.sockets.sockets.get(participant.socketId)
+        if (participant.status === 'active' && !participant.r3SubmittedAt) {
+          participantSocket?.emit('participant:rapid-fire', participantRapidFireQuiz(participant))
+        }
+      }
     }
 
     broadcast()
     callback?.({ ok: true, round })
+  })
+
+  socket.on('admin:release-winners', async (selections, callback) => {
+    if (!socket.data.isAdmin) return callback?.(hostAuthError)
+    if (state.winnersReleasedAt) return callback?.({ error: 'Winners have already been released for this event.' })
+    if (!Array.isArray(selections) || selections.length !== 3) {
+      return callback?.({ error: 'Select exactly one winner for 1st, 2nd, and 3rd place.' })
+    }
+
+    const places = selections.map((selection) => Number(selection.place)).sort((left, right) => left - right)
+    if (places.join(',') !== '1,2,3') return callback?.({ error: 'Winner places must be 1st, 2nd, and 3rd.' })
+
+    const participantIds = selections.map((selection) => selection.participantId)
+    if (new Set(participantIds).size !== 3) return callback?.({ error: 'A participant can only hold one winning place.' })
+
+    const winners = selections.map((selection) => {
+      const participant = state.participants.get(selection.participantId)
+      if (!participant || participant.status === 'eliminated' || !participant.r3SubmittedAt) return null
+      return {
+        place: Number(selection.place),
+        participantId: participant.id,
+        name: participant.name,
+        score: participant.score || 0,
+        rapidFireScore: participant.roundScores?.round3 || 0
+      }
+    })
+    if (winners.some((winner) => !winner)) return callback?.({ error: 'Every winner must be an eligible participant who completed Rapid Fire.' })
+
+    state.winners = winners.sort((left, right) => left.place - right.place)
+    state.winnersReleasedAt = new Date().toISOString()
+    await saveEvent(state)
+    io.emit('winners:released', { winners: state.winners, releasedAt: state.winnersReleasedAt })
+    broadcast()
+    callback?.({ ok: true, winners: state.winners, releasedAt: state.winnersReleasedAt })
   })
 
   socket.on('admin:eliminate', async (ids, callback) => {
@@ -458,6 +650,26 @@ io.on('connection', (socket) => {
       }
     })
 
+    const r3Details = (participant.r3Questions || []).map((q, index) => {
+      const isDebug = q.rapidFireSection === 'debug'
+      const result = participant.r3TestResults?.[q.id] || {}
+      const answer = participant.r3DraftAnswers?.[q.id]
+      const source = isDebug
+        ? state.r2Questions.find((item) => item.id === q.id)
+        : state.questions.find((item) => item.id === q.id)
+      const correct = isDebug ? result.passRatio === 1 : answer !== undefined && answer === source?.answer
+      return {
+        number: index + 1,
+        type: isDebug ? 'Debug' : 'MCQ',
+        prompt: q.prompt,
+        answer: isDebug ? null : answer ?? null,
+        code: isDebug ? participant.r3DraftCodes?.[q.id] || q.initial_code : null,
+        correct,
+        points: correct ? 200 : 0,
+        maxPoints: 200
+      }
+    })
+
     callback?.({ 
       participant: { 
         id: participant.id, 
@@ -468,7 +680,8 @@ io.on('connection', (socket) => {
         roundScores: participant.roundScores || { round1: 0, round2: 0, round3: 0 }
       }, 
       r1Details,
-      r2Details
+      r2Details,
+      r3Details
     })
   })
 
