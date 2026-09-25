@@ -53,6 +53,7 @@ alter table public.question_bank add column if not exists topic text not null de
 alter table public.question_bank add column if not exists difficulty text not null default 'medium';
 alter table public.question_bank add column if not exists question_type text not null default 'mcq';
 alter table public.question_bank add column if not exists explanation text;
+alter table public.question_bank add column if not exists title text;
 alter table public.question_bank add column if not exists is_active boolean not null default true;
 -- ============================================================
 -- ROUND 2 (PYTHON DEBUGGING) — run this block once in Supabase.

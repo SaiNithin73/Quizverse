@@ -15,23 +15,11 @@ const port = Number(process.env.PORT) || 3001
 const hostPassword = process.env.QUIZVERSE_HOST_PASSWORD || 'Sai nithin 26'
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url))
 
-const round1Questions = [
-  { id: 'q1', prompt: 'Which data structure gives average O(1) key lookup?', options: ['Binary tree', 'Hash table', 'Linked list', 'Heap'], answer: 'Hash table', points: 100, topic: 'DATA STRUCTURES', difficulty: 'easy' },
-  { id: 'q2', prompt: 'What does REST primarily model in a web API?', options: ['Resources', 'Threads', 'Pixels', 'Compilers'], answer: 'Resources', points: 100, topic: 'WEB ARCHITECTURE', difficulty: 'easy' },
-  { id: 'q3', prompt: 'Which protocol secures HTTP traffic in transit?', options: ['FTP', 'SMTP', 'TLS', 'SSH'], answer: 'TLS', points: 100, topic: 'NETWORKING', difficulty: 'medium' },
-  { id: 'q4', prompt: 'What is the output of typeof null in JavaScript?', options: ['null', 'undefined', 'object', 'boolean'], answer: 'object', points: 150, topic: 'JAVASCRIPT ENGINE', difficulty: 'medium' },
-  { id: 'q5', prompt: 'Which algorithm is typically used to find the shortest path in a weighted graph without negative edges?', options: ['Dijkstra', 'DFS', 'Kruskal', 'Binary Search'], answer: 'Dijkstra', points: 150, topic: 'ALGORITHMS', difficulty: 'medium' },
-  { id: 'q6', prompt: 'In database systems, what does the "I" in ACID transaction properties stand for?', options: ['Isolation', 'Integrity', 'Iteration', 'Indexing'], answer: 'Isolation', points: 100, topic: 'DATABASES', difficulty: 'easy' }
-]
-
-// Round 2 questions are loaded from the database (question_bank table).
-// See initDatabase() which populates state.r2Questions on startup.
-
 const state = {
   registrationOpen: true,
   round: 'lobby',
   eventId: 'event-1',
-  questions: [...round1Questions],
+  questions: [],
   r2Questions: [],
   participants: new Map(),
   archivedParticipants: [],
@@ -214,11 +202,14 @@ io.on('connection', (socket) => {
     if (participant) {
       participant.socketId = socket.id
       socket.data.participantId = id
+      if (state.round === 'round1' && !participant.quizQuestions?.length) assignQuiz(participant)
+      if (state.round === 'round2' && !participant.r2Questions?.length) assignRound2(participant)
+      saveParticipant(participant)
       socket.emit('participant:restored', participant)
       if (state.round === 'round1' && participant.quizQuestions.length) {
         socket.emit('participant:quiz', participantQuiz(participant))
       }
-      if (state.round === 'round2' && participant.r2StartedAt) {
+      if (state.round === 'round2' && participant.r2Questions.length) {
         socket.emit('participant:r2-quiz', participantR2Quiz(participant))
       }
       broadcast()
@@ -299,11 +290,8 @@ io.on('connection', (socket) => {
 
     for (const q of assignedQuestions) {
       const source = state.r2Questions.find((item) => item.id === q.id)
-      const submittedCode = submissions?.[q.id] || participant.r2DraftCodes?.[q.id] || ''
-      const expectedAnswer = source?.answer || ''
-
-      const codeRanWithoutError = Boolean(submittedCode.trim()) && submittedCode.trim().length > 0
-      const isCorrect = codeRanWithoutError
+      const execution = participant.r2TestResults?.[q.id]
+      const isCorrect = execution?.passRatio === 1
 
       const earnedPoints = isCorrect ? (source?.points || 100) : 0
       round2Score += earnedPoints
@@ -348,6 +336,9 @@ io.on('connection', (socket) => {
   socket.on('admin:round', async (round, callback) => {
     if (!socket.data.isAdmin) return callback?.(hostAuthError)
     if (!knownRounds.has(round)) return callback?.({ error: `Unknown dimension: ${round}` })
+    if (round === 'round1' && !state.questions.length) return callback?.({ error: 'Round 1 has no active questions in the database.' })
+    if (round === 'round2' && !state.r2Questions.length) return callback?.({ error: 'Round 2 has no active questions in the database. Check the question bank schema and seed data.' })
+    if (round === 'round3') return callback?.({ error: 'Round 3 is not configured with database questions yet.' })
     state.round = round
     state.startedAt = round === 'lobby' ? null : new Date().toISOString()
 

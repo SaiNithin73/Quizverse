@@ -1238,6 +1238,15 @@ function Round2Debugger({
       }
 
       try {
+        const testCases = Array.isArray(question.test_cases) && question.test_cases.length
+          ? question.test_cases
+          : [{ args: [] }]
+        const invocations = testCases.map((testCase) => {
+          const args = Array.isArray(testCase.args) ? JSON.stringify(testCase.args) : '[]'
+          return `\n\nif '${question.function_name || 'solution'}' in globals():\n    ${question.function_name || 'solution'}(*${args})`
+        }).join('')
+        const executableCode = `${currentCode}${invocations}`
+
         Sk.configure({
           output: outputFunc,
           read: (filename) => {
@@ -1249,7 +1258,7 @@ function Round2Debugger({
         })
 
         const promise = Sk.misceval.asyncToPromise(() =>
-          Sk.importMainWithBody('<stdin>', false, currentCode, true)
+          Sk.importMainWithBody('<stdin>', false, executableCode, true)
         )
 
         promise.then(
@@ -1387,7 +1396,7 @@ function Round2Debugger({
           </div>
 
           <h3 style={{ fontSize: '1.4rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '12px' }}>
-            {question.title}
+            {question.title || question.prompt?.split('\n')[0] || 'Debugging challenge'}
           </h3>
 
           <div className="problem-prompt-box">

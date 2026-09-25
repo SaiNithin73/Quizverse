@@ -61,6 +61,11 @@ export async function initDatabase(state) {
       draftAnswers: participant.draft_answers || {},
       quizStartedAt: participant.quiz_started_at,
       quizSubmittedAt: participant.quiz_submitted_at,
+      r2Questions: participant.r2_questions || [],
+      r2DraftCodes: participant.r2_draft_codes || {},
+      r2StartedAt: participant.r2_started_at,
+      r2SubmittedAt: participant.r2_submitted_at,
+      r2TestResults: participant.r2_test_results || {},
       joinedAt: participant.joined_at,
       socketId: null
     })
@@ -69,6 +74,7 @@ export async function initDatabase(state) {
   const { data: questionBank, error: questionError } = await supabase
     .from('question_bank')
     .select('id, round, topic, difficulty, question_type, prompt, options, answer, points, time_limit_seconds, explanation')
+    .or('round.is.null,round.eq.round1')
     .eq('is_active', true)
     .order('id', { ascending: true })
 
@@ -82,7 +88,7 @@ export async function initDatabase(state) {
 
   const { data: r2Bank, error: r2Error } = await supabase
     .from('question_bank')
-    .select('id, round, topic, title, difficulty, question_type, prompt, options, answer, points, time_limit_seconds, explanation, language, initial_code, function_name, test_cases')
+    .select('id, round, topic, difficulty, question_type, prompt, options, answer, points, time_limit_seconds, explanation, language, initial_code, function_name, test_cases')
     .eq('round', 'round2')
     .eq('is_active', true)
     .order('id', { ascending: true })
@@ -120,6 +126,11 @@ export async function saveParticipant(participant) {
     draft_answers: participant.draftAnswers || {},
     quiz_started_at: participant.quizStartedAt || null,
     quiz_submitted_at: participant.quizSubmittedAt || null,
+    r2_questions: participant.r2Questions || [],
+    r2_draft_codes: participant.r2DraftCodes || {},
+    r2_started_at: participant.r2StartedAt || null,
+    r2_submitted_at: participant.r2SubmittedAt || null,
+    r2_test_results: participant.r2TestResults || {},
     joined_at: participant.joinedAt
   })
   if (error) connectionError = error.message

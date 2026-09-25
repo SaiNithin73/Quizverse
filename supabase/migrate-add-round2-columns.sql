@@ -5,6 +5,7 @@ alter table public.question_bank add column if not exists language text not null
 alter table public.question_bank add column if not exists initial_code text not null default '';
 alter table public.question_bank add column if not exists function_name text;
 alter table public.question_bank add column if not exists test_cases jsonb not null default '[]'::jsonb;
+alter table public.question_bank add column if not exists title text;
 
 alter table public.participants add column if not exists r2_questions jsonb not null default '[]'::jsonb;
 alter table public.participants add column if not exists r2_draft_codes jsonb not null default '{}'::jsonb;
