@@ -46,6 +46,7 @@ function App() {
   const [rapidSecondsLeft, setRapidSecondsLeft] = useState(900)
 
   const [scoreReveal, setScoreReveal] = useState(null)
+  const [showWinnerCelebration, setShowWinnerCelebration] = useState(false)
   const revealHandledRef = useRef(null)
   const rapidTimeoutSubmittedRef = useRef(false)
   const [view, setView] = useState(savedId ? 'lobby' : 'home')
@@ -96,11 +97,15 @@ function App() {
     })
 
     socket.on('state:update', (next) => {
-      if (next) setState(next)
+      if (next) {
+        setState(next)
+        if (!next.winnersReleasedAt) setShowWinnerCelebration(false)
+      }
     })
 
     socket.on('winners:released', ({ winners, releasedAt }) => {
       setState((current) => ({ ...current, winners, winnersReleasedAt: releasedAt }))
+      setShowWinnerCelebration(true)
     })
 
     socket.on('disconnect', () => setOnline(false))
@@ -660,7 +665,7 @@ function App() {
 
 
       {notice && view !== 'quiz' && view !== 'r2-quiz' && <div className="toast">{notice}</div>}
-      {state.winners && state.winnersReleasedAt && <WinnerCelebration winners={state.winners} participantId={participant?.id} />}
+      {showWinnerCelebration && state.winners && state.winnersReleasedAt && <WinnerCelebration winners={state.winners} participantId={participant?.id} />}
     </div>
   )
 }
