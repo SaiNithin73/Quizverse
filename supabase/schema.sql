@@ -54,6 +54,20 @@ alter table public.question_bank add column if not exists difficulty text not nu
 alter table public.question_bank add column if not exists question_type text not null default 'mcq';
 alter table public.question_bank add column if not exists explanation text;
 alter table public.question_bank add column if not exists is_active boolean not null default true;
+-- ============================================================
+-- ROUND 2 (PYTHON DEBUGGING) — run this block once in Supabase.
+-- Safe to re-run: only ADDs columns, never drops or alters existing ones.
+-- ============================================================
+alter table public.question_bank add column if not exists language text not null default 'javascript';
+alter table public.question_bank add column if not exists initial_code text not null default '';
+alter table public.question_bank add column if not exists function_name text;
+alter table public.question_bank add column if not exists test_cases jsonb not null default '[]'::jsonb;
+alter table public.participants add column if not exists r2_questions jsonb not null default '[]'::jsonb;
+alter table public.participants add column if not exists r2_draft_codes jsonb not null default '{}'::jsonb;
+alter table public.participants add column if not exists r2_started_at timestamptz;
+alter table public.participants add column if not exists r2_submitted_at timestamptz;
+alter table public.participants add column if not exists r2_test_results jsonb not null default '{}'::jsonb;
+-- ================= END ROUND 2 BLOCK ========================
 alter table public.event_settings add column if not exists current_event_id text not null default 'event-1';
 alter table public.participants add column if not exists event_id text not null default 'event-1';
 alter table public.participants add column if not exists quiz_questions jsonb not null default '[]'::jsonb;

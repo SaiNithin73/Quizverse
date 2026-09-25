@@ -80,6 +80,21 @@ export async function initDatabase(state) {
 
   if (questionBank?.length) state.questions = questionBank
 
+  const { data: r2Bank, error: r2Error } = await supabase
+    .from('question_bank')
+    .select('id, round, topic, difficulty, question_type, prompt, options, answer, points, time_limit_seconds, explanation, language, initial_code, function_name, test_cases')
+    .eq('round', 'round2')
+    .eq('is_active', true)
+    .order('id', { ascending: true })
+
+  if (r2Error) {
+    connectionError = r2Error.message
+    supabase = null
+    return false
+  }
+
+  if (r2Bank?.length) state.r2Questions = r2Bank
+
   connectionError = null
   connected = true
   return true
@@ -127,13 +142,15 @@ export async function saveEvent(state) {
 }
 
 export async function startNewEvent(state) {
-  if (!supabase) return false
   const previousEventId = state.eventId
   state.eventId = `event-${Date.now()}`
   state.registrationOpen = true
   state.round = 'lobby'
   state.startedAt = null
   state.participants.clear()
+
+  if (!supabase) return true
+
   const saved = await saveEvent(state)
   if (!saved) state.previousEventId = previousEventId
   return saved

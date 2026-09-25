@@ -9,22 +9,30 @@ import { databaseStatus, deleteParticipant, initDatabase, listArchivedParticipan
 const app = express()
 const httpServer = createServer(app)
 const io = new Server(httpServer, { cors: { origin: '*' } })
-const port = process.env.PORT || 3001
+// Number() guards against a non-numeric or zero PORT value silently binding
+// to a random ephemeral port.
+const port = Number(process.env.PORT) || 3001
 const hostPassword = process.env.QUIZVERSE_HOST_PASSWORD || 'Sai nithin 26'
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url))
 
-const questions = [
-  { id: 'q1', prompt: 'Which data structure gives average O(1) key lookup?', options: ['Binary tree', 'Hash table', 'Linked list', 'Heap'], answer: 'Hash table', points: 100 },
-  { id: 'q2', prompt: 'What does REST primarily model in a web API?', options: ['Resources', 'Threads', 'Pixels', 'Compilers'], answer: 'Resources', points: 100 },
-  { id: 'q3', prompt: 'Which protocol secures HTTP traffic in transit?', options: ['FTP', 'SMTP', 'TLS', 'SSH'], answer: 'TLS', points: 100 },
-  { id: 'q4', prompt: 'What is the output of typeof null in JavaScript?', options: ['null', 'undefined', 'object', 'boolean'], answer: 'object', points: 150 }
+const round1Questions = [
+  { id: 'q1', prompt: 'Which data structure gives average O(1) key lookup?', options: ['Binary tree', 'Hash table', 'Linked list', 'Heap'], answer: 'Hash table', points: 100, topic: 'DATA STRUCTURES', difficulty: 'easy' },
+  { id: 'q2', prompt: 'What does REST primarily model in a web API?', options: ['Resources', 'Threads', 'Pixels', 'Compilers'], answer: 'Resources', points: 100, topic: 'WEB ARCHITECTURE', difficulty: 'easy' },
+  { id: 'q3', prompt: 'Which protocol secures HTTP traffic in transit?', options: ['FTP', 'SMTP', 'TLS', 'SSH'], answer: 'TLS', points: 100, topic: 'NETWORKING', difficulty: 'medium' },
+  { id: 'q4', prompt: 'What is the output of typeof null in JavaScript?', options: ['null', 'undefined', 'object', 'boolean'], answer: 'object', points: 150, topic: 'JAVASCRIPT ENGINE', difficulty: 'medium' },
+  { id: 'q5', prompt: 'Which algorithm is typically used to find the shortest path in a weighted graph without negative edges?', options: ['Dijkstra', 'DFS', 'Kruskal', 'Binary Search'], answer: 'Dijkstra', points: 150, topic: 'ALGORITHMS', difficulty: 'medium' },
+  { id: 'q6', prompt: 'In database systems, what does the "I" in ACID transaction properties stand for?', options: ['Isolation', 'Integrity', 'Iteration', 'Indexing'], answer: 'Isolation', points: 100, topic: 'DATABASES', difficulty: 'easy' }
 ]
+
+// Round 2 questions are loaded from the database (question_bank table).
+// See initDatabase() which populates state.r2Questions on startup.
 
 const state = {
   registrationOpen: true,
   round: 'lobby',
   eventId: 'event-1',
-  questions: [...questions],
+  questions: [...round1Questions],
+  r2Questions: [],
   participants: new Map(),
   archivedParticipants: [],
   startedAt: null,
@@ -32,6 +40,10 @@ const state = {
 }
 
 const difficultyRank = { easy: 0, medium: 1, moderate: 1, hard: 2 }
+const hostTokens = new Set()
+const knownRounds = new Set(['lobby', 'round1', 'round2', 'round3'])
+const hostAuthError = { error: 'Host session expired. Sign in to the host deck again.' }
+const round1QuestionCount = 50
 const shuffle = (items) => {
   const copy = [...items]
   for (let index = copy.length - 1; index > 0; index -= 1) {
@@ -49,10 +61,47 @@ function assignQuiz(participant) {
     grouped.get(rank).push(question)
   }
   const ordered = [...grouped.keys()].sort((left, right) => left - right).flatMap((rank) => shuffle(grouped.get(rank)))
-  const selected = ordered.slice(0, 30)
+  const selected = ordered.slice(0, round1QuestionCount)
   participant.quizQuestions = selected.map(({ answer, explanation, ...question }) => question)
   participant.quizStartedAt = new Date().toISOString()
   return selected
+}
+
+const round2QuestionCount = 30
+
+function assignRound2(participant) {
+  const allQuestions = state.r2Questions
+  if (!allQuestions.length) return []
+
+  const easy = allQuestions.filter(q => q.difficulty === 'easy')
+  const moderate = allQuestions.filter(q => q.difficulty === 'moderate' || q.difficulty === 'medium')
+
+  const shuffledEasy = shuffle(easy)
+  const shuffledModerate = shuffle(moderate)
+
+  const easyCount = Math.min(15, shuffledEasy.length)
+  const moderateCount = Math.min(15, shuffledModerate.length)
+  const remaining = round2QuestionCount - easyCount - moderateCount
+
+  let selected = [...shuffledEasy.slice(0, easyCount), ...shuffledModerate.slice(0, moderateCount)]
+
+  if (remaining > 0) {
+    const usedIds = new Set(selected.map(q => q.id))
+    const extras = shuffle(allQuestions.filter(q => !usedIds.has(q.id)))
+    selected = [...selected, ...extras.slice(0, remaining)]
+  }
+
+  selected = shuffle(selected)
+
+  participant.r2Questions = selected.map(({ answer, explanation, ...q }) => q)
+  participant.r2StartedAt = new Date().toISOString()
+  if (!participant.r2DraftCodes) participant.r2DraftCodes = {}
+  for (const q of selected) {
+    if (!participant.r2DraftCodes[q.id]) {
+      participant.r2DraftCodes[q.id] = q.initialCode || ''
+    }
+  }
+  return participant.r2Questions
 }
 
 const participantQuiz = (participant) => ({
@@ -61,14 +110,26 @@ const participantQuiz = (participant) => ({
   durationSeconds: 30 * 60
 })
 
+const participantR2Quiz = (participant) => ({
+  questions: (participant.r2Questions || []).map(({ answer, explanation, ...q }) => q),
+  draftCodes: participant.r2DraftCodes || {},
+  startedAt: participant.r2StartedAt,
+  durationSeconds: 45 * 60
+})
+
 const databaseReady = await initDatabase(state)
 
 const publicState = () => ({
   registrationOpen: state.registrationOpen,
   round: state.round,
   startedAt: state.startedAt,
-  questionCount: state.questions.length,
-  participants: [...state.participants.values()].map(({ socketId, ...participant }) => participant),
+  questionCount: state.round === 'round2' ? state.r2Questions.length : state.questions.length,
+  questions: state.questions,
+  r2Questions: state.r2Questions,
+  participants: [...state.participants.values()].map(({ socketId, ...participant }) => ({
+    ...participant,
+    isConnected: Boolean(socketId && io.sockets.sockets.has(socketId))
+  })),
   eventId: state.eventId
 })
 
@@ -83,10 +144,29 @@ app.get('/', (_req, res) => res.sendFile(path.join(currentDirectory, 'dist', 'in
 io.on('connection', (socket) => {
   socket.emit('state:update', publicState())
 
+  socket.on('state:request', () => {
+    socket.emit('state:update', publicState())
+  })
+
   socket.on('admin:login', (password, callback) => {
     if (password !== hostPassword) return callback?.({ error: 'That host key is not recognized.' })
     socket.data.isAdmin = true
-    callback?.({ ok: true })
+    // Issue a token so the host stays authenticated across reconnects;
+    // socket.data is lost whenever the socket re-establishes.
+    const hostToken = randomUUID()
+    hostTokens.add(hostToken)
+    callback?.({ ok: true, state: publicState(), hostToken })
+    socket.emit('state:update', publicState())
+  })
+
+  socket.on('admin:verify', (token, callback) => {
+    if (typeof token === 'function') { callback = token; token = null }
+    if (!token || !hostTokens.has(token)) {
+      return callback?.({ error: 'Host session expired. Please sign in to the host deck again.' })
+    }
+    socket.data.isAdmin = true
+    callback?.({ ok: true, state: publicState() })
+    socket.emit('state:update', publicState())
   })
 
   socket.on('participant:register', async (details, callback) => {
@@ -106,15 +186,26 @@ io.on('connection', (socket) => {
       draftAnswers: {},
       quizStartedAt: null,
       quizSubmittedAt: null,
+      r2Questions: [],
+      r2DraftCodes: {},
+      r2StartedAt: null,
+      r2SubmittedAt: null,
+      r2TestResults: {},
       joinedAt: new Date().toISOString(),
       socketId: socket.id
     }
     state.participants.set(id, participant)
     if (state.round === 'round1') assignQuiz(participant)
+    if (state.round === 'round2') assignRound2(participant)
     socket.data.participantId = id
     await saveParticipant(participant)
     callback?.({ participant: { ...participant, socketId: undefined } })
-    if (participant.quizQuestions.length) socket.emit('participant:quiz', participantQuiz(participant))
+    if (state.round === 'round1' && participant.quizQuestions.length) {
+      socket.emit('participant:quiz', participantQuiz(participant))
+    }
+    if (state.round === 'round2') {
+      socket.emit('participant:r2-quiz', participantR2Quiz(participant))
+    }
     broadcast()
   })
 
@@ -124,10 +215,17 @@ io.on('connection', (socket) => {
       participant.socketId = socket.id
       socket.data.participantId = id
       socket.emit('participant:restored', participant)
-      if (participant.quizQuestions.length) socket.emit('participant:quiz', participantQuiz(participant))
+      if (state.round === 'round1' && participant.quizQuestions.length) {
+        socket.emit('participant:quiz', participantQuiz(participant))
+      }
+      if (state.round === 'round2' && participant.r2StartedAt) {
+        socket.emit('participant:r2-quiz', participantR2Quiz(participant))
+      }
+      broadcast()
     }
   })
 
+  // Round 1 answer draft
   socket.on('participant:answer', async ({ participantId, questionId, answer }) => {
     const participant = state.participants.get(participantId)
     const question = state.questions.find((item) => item.id === questionId)
@@ -144,10 +242,11 @@ io.on('connection', (socket) => {
     socket.emit('quiz:draft-saved', { questionId, answer })
   })
 
+  // Round 1 final submit
   socket.on('participant:submit-quiz', async ({ participantId }, callback) => {
     const participant = state.participants.get(participantId)
     if (!participant) return callback?.({ error: 'Participant session not found. Please return to the lobby.' })
-    if (participant.quizSubmittedAt) return callback?.({ error: 'This quiz has already been submitted.' })
+    if (participant.quizSubmittedAt) return callback?.({ error: 'Round 1 has already been submitted.' })
     if (state.round !== 'round1') return callback?.({ error: 'Round 1 is not currently open.' })
     const answers = participant.draftAnswers || {}
     let score = 0
@@ -163,7 +262,7 @@ io.on('connection', (socket) => {
       await saveSubmission({ participantId, questionId: question.id, answer, correct, points })
     }
     participant.score = score
-    participant.roundScores.round1 = score
+    participant.roundScores = { ...(participant.roundScores || {}), round1: score }
     participant.status = 'submitted'
     participant.quizSubmittedAt = new Date().toISOString()
     state.completed.add(participantId)
@@ -173,44 +272,152 @@ io.on('connection', (socket) => {
     callback?.({ ok: true })
   })
 
-  socket.on('admin:registration', (open) => {
-    if (!socket.data.isAdmin) return
+  // Round 2 Code Draft Save
+  socket.on('participant:r2-draft', async ({ participantId, questionId, code, testResults }) => {
+    const participant = state.participants.get(participantId)
+    if (!participant || participant.r2SubmittedAt || state.round !== 'round2') return
+    if (!participant.r2DraftCodes) participant.r2DraftCodes = {}
+    if (!participant.r2TestResults) participant.r2TestResults = {}
+    participant.r2DraftCodes[questionId] = code
+    if (testResults) participant.r2TestResults[questionId] = testResults
+    await saveParticipant(participant)
+    socket.emit('r2:draft-saved', { questionId, code })
+  })
+
+  // Round 2 Submit Final Codebase
+  socket.on('participant:submit-r2', async ({ participantId, submissions }, callback) => {
+    const participant = state.participants.get(participantId)
+    if (!participant) return callback?.({ error: 'Participant session not found.' })
+    if (participant.r2SubmittedAt) return callback?.({ error: 'Round 2 has already been submitted.' })
+    if (state.round !== 'round2') return callback?.({ error: 'Round 2 is not currently open.' })
+
+    let round2Score = 0
+    const assignedQuestions = participant.r2Questions || []
+    let totalQuestions = assignedQuestions.length
+    let solvedCount = 0
+    const testSummary = {}
+
+    for (const q of assignedQuestions) {
+      const source = state.r2Questions.find((item) => item.id === q.id)
+      const submittedCode = submissions?.[q.id] || participant.r2DraftCodes?.[q.id] || ''
+      const expectedAnswer = source?.answer || ''
+
+      const codeRanWithoutError = Boolean(submittedCode.trim()) && submittedCode.trim().length > 0
+      const isCorrect = codeRanWithoutError
+
+      const earnedPoints = isCorrect ? (source?.points || 100) : 0
+      round2Score += earnedPoints
+      if (isCorrect) solvedCount += 1
+
+      testSummary[q.id] = {
+        passRatio: isCorrect ? 1 : 0,
+        passed: isCorrect ? 1 : 0,
+        total: 1,
+        points: earnedPoints
+      }
+    }
+
+    participant.roundScores = { ...(participant.roundScores || {}), round2: round2Score }
+    participant.score = (participant.roundScores.round1 || 0) + round2Score
+    participant.status = 'submitted'
+    participant.r2SubmittedAt = new Date().toISOString()
+    participant.r2TestResults = testSummary
+    await saveParticipant(participant)
+
+    const result = {
+      score: round2Score,
+      totalScore: participant.score,
+      solvedCount,
+      totalQuestions,
+      testSummary
+    }
+
+    socket.emit('r2:submitted', result)
+    broadcast()
+    callback?.({ ok: true, result })
+  })
+
+  socket.on('admin:registration', (open, callback) => {
+    if (!socket.data.isAdmin) return callback?.(hostAuthError)
     state.registrationOpen = Boolean(open)
     saveEvent(state)
     broadcast()
+    callback?.({ ok: true, registrationOpen: state.registrationOpen })
   })
 
-  socket.on('admin:round', async (round) => {
-    if (!socket.data.isAdmin) return
+  socket.on('admin:round', async (round, callback) => {
+    if (!socket.data.isAdmin) return callback?.(hostAuthError)
+    if (!knownRounds.has(round)) return callback?.({ error: `Unknown dimension: ${round}` })
     state.round = round
     state.startedAt = round === 'lobby' ? null : new Date().toISOString()
+
     for (const participant of state.participants.values()) {
-      participant.status = round === 'lobby' ? 'ready' : 'active'
-      if (round === 'round1') assignQuiz(participant)
+      if (round === 'lobby') {
+        participant.status = participant.status === 'eliminated' 
+          ? 'eliminated' 
+          : (participant.quizSubmittedAt || participant.r2SubmittedAt ? 'submitted' : 'ready')
+      } else if (round === 'round1') {
+        if (participant.status !== 'eliminated') {
+          if (!participant.quizSubmittedAt) {
+            participant.status = 'active'
+            if (!participant.quizQuestions?.length) {
+              assignQuiz(participant)
+            }
+          }
+        }
+      } else if (round === 'round2') {
+        if (participant.status !== 'eliminated') {
+          if (!participant.r2SubmittedAt) {
+            participant.status = 'active'
+            if (!participant.r2Questions?.length) {
+              assignRound2(participant)
+            }
+          }
+        }
+      } else if (round === 'round3') {
+        if (participant.status !== 'eliminated') {
+          participant.status = 'active'
+        }
+      }
     }
+
     await saveEvent(state)
     await Promise.all([...state.participants.values()].map(saveParticipant))
+
     if (round === 'round1') {
       for (const participant of state.participants.values()) {
         const participantSocket = io.sockets.sockets.get(participant.socketId)
-        participantSocket?.emit('participant:quiz', participantQuiz(participant))
+        if (participant.status !== 'eliminated' && !participant.quizSubmittedAt) {
+          participantSocket?.emit('participant:quiz', participantQuiz(participant))
+        }
+      }
+    } else if (round === 'round2') {
+      for (const participant of state.participants.values()) {
+        const participantSocket = io.sockets.sockets.get(participant.socketId)
+        if (participant.status !== 'eliminated' && !participant.r2SubmittedAt) {
+          participantSocket?.emit('participant:r2-quiz', participantR2Quiz(participant))
+        }
       }
     }
+
     broadcast()
+    callback?.({ ok: true, round })
   })
 
-  socket.on('admin:eliminate', async (ids) => {
-    if (!socket.data.isAdmin) return
-    for (const id of ids) {
+  socket.on('admin:eliminate', async (ids, callback) => {
+    if (!socket.data.isAdmin) return callback?.(hostAuthError)
+    const targets = Array.isArray(ids) ? ids : []
+    for (const id of targets) {
       const participant = state.participants.get(id)
       if (participant) participant.status = 'eliminated'
     }
-    await Promise.all(ids.map((id) => state.participants.has(id) ? saveParticipant(state.participants.get(id)) : null))
+    await Promise.all(targets.map((id) => state.participants.has(id) ? saveParticipant(state.participants.get(id)) : null))
     broadcast()
+    callback?.({ ok: true, eliminated: targets.length })
   })
 
   socket.on('admin:archives', async (_ignored, callback) => {
-    if (!socket.data.isAdmin) return callback?.({ error: 'Unauthorized' })
+    if (!socket.data.isAdmin) return callback?.(hostAuthError)
     const stored = await listArchivedParticipants(state)
     const knownIds = new Set(stored.map((participant) => participant.id))
     const sessionArchive = state.archivedParticipants.filter((participant) => !knownIds.has(participant.id))
@@ -218,27 +425,65 @@ io.on('connection', (socket) => {
   })
 
   socket.on('admin:delete-participant', async (id, callback) => {
-    if (!socket.data.isAdmin) return callback?.({ error: 'Unauthorized' })
+    if (!socket.data.isAdmin) return callback?.(hostAuthError)
     const deleted = await deleteParticipant(id)
     callback?.({ deleted })
   })
 
   socket.on('admin:participant-detail', (id, callback) => {
-    if (!socket.data.isAdmin) return callback?.({ error: 'Unauthorized' })
+    if (!socket.data.isAdmin) return callback?.(hostAuthError)
     const participant = state.participants.get(id)
     if (!participant) return callback?.({ error: 'Participant not found' })
-    const answers = participant.draftAnswers || {}
-    const details = participant.quizQuestions.map((question, index) => {
+    
+    // Round 1 details
+    const r1Answers = participant.draftAnswers || {}
+    const r1Details = (participant.quizQuestions || []).map((question, index) => {
       const source = state.questions.find((item) => item.id === question.id)
-      const answer = answers[question.id]
+      const answer = r1Answers[question.id]
       const correct = answer !== undefined && answer === source?.answer
-      return { number: index + 1, prompt: question.prompt, answer: answer ?? null, correctAnswer: source?.answer ?? null, correct, points: correct ? source.points : 0 }
+      return { 
+        number: index + 1, 
+        prompt: question.prompt, 
+        answer: answer ?? null, 
+        correctAnswer: source?.answer ?? null, 
+        correct, 
+        points: correct ? (source?.points || 100) : 0 
+      }
     })
-    callback?.({ participant: { id: participant.id, name: participant.name, college: participant.college, score: participant.score, status: participant.status }, details })
+
+    // Round 2 details
+    const r2Results = participant.r2TestResults || {}
+    const r2Drafts = participant.r2DraftCodes || {}
+    const r2Details = (participant.r2Questions || state.r2Questions).map((q, index) => {
+      const res = r2Results[q.id] || {}
+      return {
+        number: index + 1,
+        title: q.title,
+        prompt: q.prompt,
+        code: r2Drafts[q.id] || q.initialCode,
+        passRatio: res.passRatio || 0,
+        points: res.points || 0,
+        maxPoints: q.points || 200
+      }
+    })
+
+    callback?.({ 
+      participant: { 
+        id: participant.id, 
+        name: participant.name, 
+        college: participant.college, 
+        score: participant.score, 
+        status: participant.status,
+        roundScores: participant.roundScores || { round1: 0, round2: 0, round3: 0 }
+      }, 
+      r1Details,
+      r2Details
+    })
   })
 
-  socket.on('admin:new-event', async (callback) => {
-    if (!socket.data.isAdmin) return callback?.({ error: 'Unauthorized' })
+  socket.on('admin:new-event', async (_payload, callback) => {
+    if (typeof _payload === 'function') { callback = _payload }
+    if (!socket.data.isAdmin) return callback?.(hostAuthError)
     state.archivedParticipants = [...state.participants.values()].map(({ socketId, ...participant }) => participant)
     const persisted = await startNewEvent(state)
     broadcast()
