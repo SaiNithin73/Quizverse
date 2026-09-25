@@ -443,7 +443,7 @@ function App() {
         {view === 'r2-quiz' && (
           <Round2Debugger 
             question={activeR2Question} 
-            code={r2Drafts[activeR2Question?.id] || activeR2Question?.initialCode || ''} 
+            code={r2Drafts[activeR2Question?.id] || activeR2Question?.initial_code || ''} 
             onSaveCode={saveR2Code}
             index={r2Index}
             total={r2Quiz.questions.length}
@@ -1306,8 +1306,8 @@ function Round2Debugger({
   const resetToDefault = () => {
     if (isCompleted) return
     if (window.confirm('Reset code to the original buggy starting state?')) {
-      setCurrentCode(question.initialCode)
-      onSaveCode(question.initialCode, null)
+      setCurrentCode(question.initial_code || '')
+      onSaveCode(question.initial_code || '', null)
       setTestResults(null)
     }
   }

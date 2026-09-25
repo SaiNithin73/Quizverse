@@ -82,7 +82,7 @@ export async function initDatabase(state) {
 
   const { data: r2Bank, error: r2Error } = await supabase
     .from('question_bank')
-    .select('id, round, topic, difficulty, question_type, prompt, options, answer, points, time_limit_seconds, explanation, language, initial_code, function_name, test_cases')
+    .select('id, round, topic, title, difficulty, question_type, prompt, options, answer, points, time_limit_seconds, explanation, language, initial_code, function_name, test_cases')
     .eq('round', 'round2')
     .eq('is_active', true)
     .order('id', { ascending: true })

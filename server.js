@@ -98,7 +98,7 @@ function assignRound2(participant) {
   if (!participant.r2DraftCodes) participant.r2DraftCodes = {}
   for (const q of selected) {
     if (!participant.r2DraftCodes[q.id]) {
-      participant.r2DraftCodes[q.id] = q.initialCode || ''
+      participant.r2DraftCodes[q.id] = q.initial_code || ''
     }
   }
   return participant.r2Questions
@@ -460,7 +460,7 @@ io.on('connection', (socket) => {
         number: index + 1,
         title: q.title,
         prompt: q.prompt,
-        code: r2Drafts[q.id] || q.initialCode,
+        code: r2Drafts[q.id] || q.initial_code,
         passRatio: res.passRatio || 0,
         points: res.points || 0,
         maxPoints: q.points || 200
