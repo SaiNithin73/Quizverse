@@ -488,14 +488,6 @@ io.on('connection', (socket) => {
     if (round === 'round3' && (state.questions.length < rapidFireQuestionCount || state.r2Questions.length < rapidFireQuestionCount)) {
       return callback?.({ error: 'Rapid Fire needs at least 10 active MCQs and 10 active debugging questions.' })
     }
-    if (round === 'round3') {
-      const incomplete = [...state.participants.values()].filter((participant) => (
-        participant.status !== 'eliminated' && (!participant.quizSubmittedAt || !participant.r2SubmittedAt)
-      ))
-      if (incomplete.length) {
-        return callback?.({ error: `Rapid Fire is locked until all ${incomplete.length} remaining participant(s) complete Rounds 1 and 2.` })
-      }
-    }
     state.round = round
     state.startedAt = round === 'lobby' ? null : new Date().toISOString()
 

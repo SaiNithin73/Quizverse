@@ -1566,6 +1566,10 @@ function Round2Debugger({
       }
 
       try {
+        const skulpt = window.Sk
+        if (!skulpt?.configure || !skulpt?.misceval?.asyncToPromise || !skulpt?.importMainWithBody) {
+          throw new Error('The Python debugging console is unavailable. Refresh the page and try again.')
+        }
         const testCases = Array.isArray(question.test_cases) && question.test_cases.length
           ? question.test_cases
           : [{ args: [] }]
@@ -1575,18 +1579,18 @@ function Round2Debugger({
         }).join('')
         const executableCode = `${currentCode}${invocations}`
 
-        Sk.configure({
+        skulpt.configure({
           output: outputFunc,
           read: (filename) => {
-            if (Sk.builtinFiles === undefined || Sk.builtinFiles['files'][filename] === undefined) {
+            if (skulpt.builtinFiles === undefined || skulpt.builtinFiles['files'][filename] === undefined) {
               throw new Error('File not found: ' + filename)
             }
-            return Sk.builtinFiles['files'][filename]
+            return skulpt.builtinFiles['files'][filename]
           }
         })
 
-        const promise = Sk.misceval.asyncToPromise(() =>
-          Sk.importMainWithBody('<stdin>', false, executableCode, true)
+        const promise = skulpt.misceval.asyncToPromise(() =>
+          skulpt.importMainWithBody('<stdin>', false, executableCode, true)
         )
 
         promise.then(
