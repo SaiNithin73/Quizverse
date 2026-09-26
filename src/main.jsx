@@ -444,6 +444,7 @@ function App() {
         state={state} 
         online={online} 
         sessionExpired={hostSessionExpired}
+        onSessionExpired={expireHostSession}
         onExit={() => {
           sessionStorage.removeItem('quizverse-host-auth')
           sessionStorage.removeItem('quizverse-host-token')
@@ -2101,7 +2102,7 @@ function ScoreReveal({ result, onReturnHome, onAnalyze }) {
   )
 }
 
-function AdminPanel({ state, online, sessionExpired, onExit }) {
+function AdminPanel({ state, online, sessionExpired, onSessionExpired, onExit }) {
   const [selected, setSelected] = useState([])
   const [archived, setArchived] = useState([])
   const [showArchive, setShowArchive] = useState(false)
@@ -2137,6 +2138,10 @@ function AdminPanel({ state, online, sessionExpired, onExit }) {
     if (!online) return flash(offlineMessage)
     socket.timeout(4000).emit(event, payload, (err, result) => {
       if (err) return flash(timeoutMessage)
+      if (result?.error === 'Host session expired. Please sign in to the host deck again.') {
+        onSessionExpired()
+        return
+      }
       onResult(result || {})
     })
   }
