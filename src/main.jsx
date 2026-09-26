@@ -66,6 +66,12 @@ function App() {
     setTimeout(() => setNotice(''), duration)
   }
 
+  const expireHostSession = () => {
+    sessionStorage.removeItem('quizverse-host-auth')
+    sessionStorage.removeItem('quizverse-host-token')
+    setHostSessionExpired(true)
+  }
+
   const closeIntro = () => {
     sessionStorage.setItem('quizverse-intro-seen', '1')
     setShowIntro(false)
@@ -91,7 +97,7 @@ function App() {
       // A timeout here also catches a stale server that never answers.
       if (sessionStorage.getItem('quizverse-host-auth') === '1') {
         socket.timeout(2500).emit('admin:verify', sessionStorage.getItem('quizverse-host-token'), (err, result) => {
-          if (err || result?.error) setHostSessionExpired(true)
+          if (err || result?.error) expireHostSession()
         })
       }
     })
@@ -242,7 +248,7 @@ function App() {
       }
       if (sessionStorage.getItem('quizverse-host-auth') === '1') {
         socket.timeout(2500).emit('admin:verify', sessionStorage.getItem('quizverse-host-token'), (err, result) => {
-          if (err || result?.error) setHostSessionExpired(true)
+          if (err || result?.error) expireHostSession()
         })
       }
     }
@@ -254,7 +260,7 @@ function App() {
         if (savedId) socket.emit('participant:restore', savedId)
         if (sessionStorage.getItem('quizverse-host-auth') === '1') {
           socket.timeout(2500).emit('admin:verify', sessionStorage.getItem('quizverse-host-token'), (err, result) => {
-            if (err || result?.error) setHostSessionExpired(true)
+            if (err || result?.error) expireHostSession()
           })
         }
       }
