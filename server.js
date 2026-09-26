@@ -1,7 +1,7 @@
 import express from 'express'
 import { createServer } from 'node:http'
 import { Server } from 'socket.io'
-import { randomUUID } from 'node:crypto'
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { databaseStatus, deleteParticipant, initDatabase, listArchivedParticipants, saveEvent, saveParticipant, saveSubmission, startNewEvent } from './database.js'
@@ -14,6 +14,24 @@ const io = new Server(httpServer, { cors: { origin: '*' } })
 const port = Number(process.env.PORT) || 3001
 const hostPassword = process.env.QUIZVERSE_HOST_PASSWORD || 'Sai nithin 26'
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url))
+
+const issueHostToken = () => {
+  const tokenId = randomUUID()
+  const signature = createHmac('sha256', hostPassword).update(tokenId).digest('base64url')
+  return `${tokenId}.${signature}`
+}
+
+const isValidHostToken = (token) => {
+  if (typeof token !== 'string') return false
+  const separator = token.lastIndexOf('.')
+  if (separator < 1) return false
+  const tokenId = token.slice(0, separator)
+  const signature = token.slice(separator + 1)
+  const expected = createHmac('sha256', hostPassword).update(tokenId).digest('base64url')
+  const actualBytes = Buffer.from(signature)
+  const expectedBytes = Buffer.from(expected)
+  return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes)
+}
 
 const state = {
   registrationOpen: true,
@@ -30,7 +48,6 @@ const state = {
 }
 
 const difficultyRank = { easy: 0, medium: 1, moderate: 1, hard: 2 }
-const hostTokens = new Set()
 const knownRounds = new Set(['lobby', 'round1', 'round2', 'round3'])
 const hostAuthError = { error: 'Host session expired. Sign in to the host deck again.' }
 const round1QuestionCount = 30
@@ -196,17 +213,13 @@ io.on('connection', (socket) => {
   socket.on('admin:login', (password, callback) => {
     if (password !== hostPassword) return callback?.({ error: 'That host key is not recognized.' })
     socket.data.isAdmin = true
-    // Issue a token so the host stays authenticated across reconnects;
-    // socket.data is lost whenever the socket re-establishes.
-    const hostToken = randomUUID()
-    hostTokens.add(hostToken)
-    callback?.({ ok: true, state: publicState(), hostToken })
+    callback?.({ ok: true, state: publicState(), hostToken: issueHostToken() })
     socket.emit('state:update', publicState())
   })
 
   socket.on('admin:verify', (token, callback) => {
     if (typeof token === 'function') { callback = token; token = null }
-    if (!token || !hostTokens.has(token)) {
+    if (!isValidHostToken(token)) {
       return callback?.({ error: 'Host session expired. Please sign in to the host deck again.' })
     }
     socket.data.isAdmin = true
